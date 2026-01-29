@@ -5,3 +5,5 @@ PyPDF2
 requests
 beautifulsoup4
 python-docx
+openai
+python-dotenv
