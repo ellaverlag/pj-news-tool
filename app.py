@@ -26,7 +26,6 @@ st.markdown(f"""
 st.sidebar.header("🔐 Login")
 pw_input = st.sidebar.text_input("Tool-Passwort:", type="password")
 
-# Passwortprüfung aus den Secrets
 if pw_input != st.secrets.get("TOOL_PASSWORD", "pj-redaktion-2026"):
     st.warning("Bitte gültiges Passwort eingeben.")
     st.stop()
@@ -60,19 +59,22 @@ def export_to_wordpress(title, content):
     
     try:
         res = requests.post(endpoint, json=payload, auth=(wp_user, wp_pw), timeout=15)
-        if res.status_code == 201: return "✅ Erfolg: Entwurf in WordPress angelegt!"
-        else: return f"❌ WP-Fehler: {res.status_code}"
-    except Exception as e: return f"❌ Verbindung fehlgeschlagen: {e}"
+        if res.status_code == 201: 
+            return "✅ Erfolg: Der Entwurf wurde in WordPress angelegt!"
+        else: 
+            return f"❌ WP-Fehler: {res.status_code} (Prüfe User/App-Passwort)"
+    except Exception as e: 
+        return f"❌ Verbindung fehlgeschlagen: {str(e)}"
 
 # --- HAUPTBEREICH ---
 st.title("🚀 packaging journal Redaktions Tool")
 
 if modus == "Standard Online-News":
     l_opt = st.radio("Artikellänge:", ["Kurz (~1.200)", "Normal (~2.500)", "Lang (~5.000)"], horizontal=True)
-    system_prompt = f"Du bist Redakteur beim packaging journal. Erstelle eine Online-News. Titel max 6 Wörter, Keyword 1 Wort. Länge: {l_opt}."
+    system_prompt = f"Du bist Redakteur beim packaging journal. Erstelle eine Online-News. Titel max 6 Wörter, Keyword 1 Wort. Sachlich, kein PR-Fluff. Länge: {l_opt}."
 else:
     selected_messe = st.sidebar.selectbox("Messe wählen:", ["LogiMat", "interpack", "Fachpack", "SPS"])
-    l_opt = st.radio("Print-Länge (Online ist immer ausführlich):", ["KURZ (900)", "NORMAL (1300)", "LANG (2000)"], horizontal=True)
+    l_opt = st.radio("Print-Länge:", ["KURZ (900)", "NORMAL (1300)", "LANG (2000)"], horizontal=True)
     m_links = {
         "LogiMat": "https://www.logimat-messe.de/de/die-messe/ausstellerliste",
         "interpack": "https://www.interpack.de/de/Aussteller_Produkte/Ausstellerverzeichnis",
@@ -81,7 +83,7 @@ else:
     }
     m_link = m_links.get(selected_messe, "")
     p_len = l_opt.split(" ")[0]
-    system_prompt = f"Erstelle Print (ca. {p_len} Zeichen) & Online Vorbericht für {selected_messe}. Titel max 6 Wörter. Standinfo verlinken auf {m_link}."
+    system_prompt = f"Erstelle Print (ca. {p_len} Zeichen) & Online Vorbericht (2500-5000 Zeichen) für {selected_messe}. Titel max 6 Wörter. Standinfo verlinken auf {m_link}. Sachlich bleiben."
 
 st.markdown("### 📄 Quellmaterial bereitstellen")
 col_u, col_f = st.columns(2)
@@ -111,31 +113,50 @@ if st.button(f"✨ {modus.upper()} JETZT GENERIEREN", type="primary"):
         st.warning("Bitte Material bereitstellen.")
     else:
         try:
-            with st.spinner("Modelle werden geprüft und Text generiert..."):
+            with st.spinner("KI generiert den Text..."):
                 genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
                 
-                # Dynamische Modellauswahl
+                # Modellauswahl
                 available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
                 target_model = "models/gemini-1.5-flash"
                 if target_model not in available_models:
                     target_model = "models/gemini-pro" if "models/gemini-pro" in available_models else available_models[0]
                 
-                st.caption(f"Verwendetes System: {target_model}")
-                
                 model = genai.GenerativeModel(target_model, system_instruction=system_prompt)
                 response = model.generate_content(final_text)
                 
-                st.session_state['last_res'] = response.text
-                st.success("Erstellung abgeschlossen!")
-                st.divider()
-                st.markdown(st.session_state['last_res'])
+                # Speichern im Session State
+                st.session_state['last_result'] = response.text
+                st.success("Text erfolgreich generiert!")
+
+        except Exception as e:
+            st.error(f"Fehler: {e}")
+
+# EXPORT SEKTION (nur anzeigen wenn Text vorhanden ist)
+if 'last_result' in st.session_state:
+    st.divider()
+    st.markdown(st.session_state['last_result'])
+    
+    st.markdown("### 📥 Export & CMS")
+    c1, c2 = st.columns(2)
+    
+    with c1:
+        st.download_button(
+            label="📄 Word-Download (.docx)", 
+            data=create_docx(st.session_state['last_result']), 
+            file_name="PJ_Beitrag.docx"
+        )
+    
+    with c2:
+        if st.button("🌐 In WordPress exportieren (Entwurf)"):
+            with st.spinner("Sende Daten an WordPress..."):
+                lines = st.session_state['last_result'].split('\n')
+                title_candidate = next((l for l in lines if l.strip() and "SEO" not in l and "Keyword" not in l), "Neuer Beitrag")
+                clean_title = title_candidate.strip("# ").strip()
                 
-                c1, c2 = st.columns(2)
-                with c1:
-                    st.download_button("📄 Word-Download", data=create_docx(st.session_state['last_res']), file_name="PJ_Entwurf.docx")
-                with c2:
-                    if st.button("🌐 WordPress Export"):
-                        title = st.session_state['last_res'].split('\n')[0].strip("# ")
-                        msg = export_to_wordpress(title, st.session_state['last_res'])
-                        st.info(msg)
-        except Exception as e: st.error(f"Fehler: {e}")
+                msg = export_to_wordpress(clean_title, st.session_state['last_result'])
+                
+                if "✅" in msg:
+                    st.success(msg)
+                else:
+                    st.error(msg)
