@@ -1,83 +1,69 @@
 import streamlit as st
 import google.generativeai as genai
 
-# --- KONFIGURATION ---
-# Hier wird die Seite eingerichtet
-st.set_page_config(page_title="PJ News Generator", page_icon="📝", layout="centered")
+st.set_page_config(page_title="PJ News Generator", page_icon="📝")
 
 # --- MASTER PROMPT ---
-# Das ist dein Regelwerk, das wir definiert haben
 SYSTEM_PROMPT = """
-Du bist erfahrene:r Fachredakteur:in beim "packaging journal". Deine Zielgruppe sind Entscheider, Ingenieure und Einkäufer der Verpackungsindustrie. 
-Dein Stil ist objektiv, präzise, branchennah und journalistisch hochwertig.
-
-DEINE AUFGABE:
-Verwandle das Eingabe-Material in einen journalistischen Online-Artikel.
-Oberstes Gebot: Trennung von Nachricht und Werbung. Filtere reine Marketing-Aussagen heraus.
-
-REGELN:
-* Kein PR-Fluff (kein "stolz", "einzigartig", "state-of-the-art").
-* Firmennamen normal schreiben (keine VERSALIEN).
-* Rechtsformen entfernen (kein GmbH, AG, Co. KG).
-* Keine ® oder ™ Zeichen.
-* Zahlen ausschreiben oder einheitlich formatieren.
-
-STRUKTUR DER AUSGABE:
-1. SEO-BOX (Fokus-Keyword, Meta Description, Tags)
-2. ARTIKEL (H1 Titel, Teaser/Lead fettgedruckt, Body mit H2, Fazit)
+Du bist erfahrene:r Fachredakteur:in beim "packaging journal".
+Erstelle aus dem Quelltext eine Online-News.
+REGELN: Trennung von Nachricht/Werbung, keine PR-Adjektive, sachlich, präzise.
+FORMAT:
+1. SEO-BOX (Keyword, Snippet)
+2. ARTIKEL (H1, Teaser fett, Body, Fazit)
 """
 
-# --- SIDEBAR & API SETUP ---
-st.sidebar.header("Einstellungen")
-# Wir holen den API Key sicher aus den Streamlit Secrets (oder Eingabefeld)
-api_key = st.sidebar.text_input("Google API Key", type="password", help="Hier den Key von AI Studio eingeben")
+st.title("📝 PJ News-Generator (V2)")
 
-# Versuche, den Key aus den System-Secrets zu laden, falls im Feld nichts steht
-if not api_key:
-    if "GOOGLE_API_KEY" in st.secrets:
-        api_key = st.secrets["GOOGLE_API_KEY"]
+# API Key Handling
+api_key = st.sidebar.text_input("Google API Key", type="password")
+if not api_key and "GOOGLE_API_KEY" in st.secrets:
+    api_key = st.secrets["GOOGLE_API_KEY"]
 
-# --- HAUPTBEREICH ---
-st.title("📝 Packaging Journal News-Generator")
-st.markdown("Füge unten einfach die Pressemitteilung ein. Die KI erstellt daraus den fertigen Artikel inkl. SEO-Box.")
+source_text = st.text_area("Quelltext:", height=200)
 
-# Eingabefeld für den Text
-source_text = st.text_area("Quelltext / Pressemitteilung:", height=300, placeholder="Hier Text reinkopieren...")
-
-# Button zum Generieren
-generate_btn = st.button("Artikel erstellen ✨", type="primary")
-
-# --- LOGIK ---
-if generate_btn:
+if st.button("Generieren ✨", type="primary"):
     if not api_key:
-        st.error("Bitte gib einen Google API Key in der Seitenleiste ein oder hinterlege ihn in den Secrets.")
+        st.error("Kein API Key gefunden.")
         st.stop()
     
-    if not source_text:
-        st.warning("Bitte gib erst einen Text ein.")
-        st.stop()
-
     try:
-        # Spinner zeigt an, dass gearbeitet wird
-        with st.spinner("Die Redaktions-KI schreibt..."):
-            # Modell konfigurieren
-            genai.configure(api_key=api_key)
-            # Wir nutzen Gemini 1.5 Flash (schnell & günstig) oder Pro (besser)
-            model = genai.GenerativeModel(
-                model_name="gemini-pro",
-                system_instruction=SYSTEM_PROMPT
-            )
-            
-            # Anfrage senden
+        genai.configure(api_key=api_key)
+        
+        # AUTOMATISCHE MODELL-SUCHE
+        # Wir fragen die API: "Was hast du da?" und nehmen das Beste.
+        available_models = [m.name for m in genai.list_models()]
+        
+        # Bevorzugte Modelle in Reihenfolge
+        target_model = "models/gemini-1.5-flash"
+        if "models/gemini-1.5-flash" not in available_models:
+             # Fallback, falls Flash nicht da ist
+            if "models/gemini-pro" in available_models:
+                target_model = "models/gemini-pro"
+            else:
+                # Nimm einfach das erste, das generieren kann
+                target_model = available_models[0]
+
+        # Info für dich (damit wir sehen, was passiert)
+        st.caption(f"Nutze Modell: {target_model}")
+        
+        model = genai.GenerativeModel(
+            model_name=target_model,
+            system_instruction=SYSTEM_PROMPT
+        )
+        
+        with st.spinner("Schreibe Artikel..."):
             response = model.generate_content(source_text)
-            
-            # Ergebnis anzeigen
-            st.success("Fertig!")
-            st.markdown("---")
             st.markdown(response.text)
-            
-            # Kleiner Helfer: Button zum Kopieren des Ergebnisses (Workaround, da Streamlit keinen nativen Copy-Button hat)
-            st.caption("Tipp: Einfach den Text markieren und kopieren.")
 
     except Exception as e:
-        st.error(f"Ein Fehler ist aufgetreten: {e}")
+        st.error(f"Fehler: {e}")
+        # DIAGNOSE-HILFE:
+        st.warning("Diagnose-Daten (bitte kopieren falls es nicht geht):")
+        try:
+            mods = genai.list_models()
+            st.write("Verfügbare Modelle für diesen Key:")
+            for m in mods:
+                st.write(f"- {m.name}")
+        except:
+            st.write("Konnte Modelle nicht auflisten.")
