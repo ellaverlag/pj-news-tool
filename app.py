@@ -12,7 +12,7 @@ import os
 # --- KONFIGURATION & BRANDING ---
 st.set_page_config(page_title="packaging journal Redaktions Tool", page_icon="🚀", layout="wide")
 
-# Custom CSS für Corporate Design (#24A27F)
+# Custom CSS für Corporate Design
 st.markdown(f"""
     <style>
     .stApp {{ background-color: #f8f9fa; }}
@@ -49,10 +49,9 @@ def create_docx(text):
     return bio.getvalue()
 
 def generate_visual(topic):
-    """Generiert ein horizontales Bild passend zum Thema via DALL-E 3"""
+    """Generiert ein horizontales Bild via OpenAI DALL-E 3"""
     try:
         client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
-        # Festgelegtes Format: Horizontal (1792x1024)
         response = client.images.generate(
             model="dall-e-3",
             prompt=f"Professional high-end photography for the packaging industry, theme: {topic}. Cinematic lighting, 8k, horizontal wide angle, photorealistic, no text.",
@@ -113,21 +112,31 @@ if st.button(f"✨ {modus.upper()} JETZT GENERIEREN", type="primary"):
     else:
         try:
             with st.spinner("KI generiert Text und Bild..."):
-                # 1. Text Generierung (Google Gemini)
+                # 1. Text Generierung (Google Gemini) mit Fallback-Logik gegen 404
                 genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-                model = genai.GenerativeModel("gemini-1.5-flash", system_instruction=system_prompt)
-                response = model.generate_content(final_text)
-                st.session_state['last_result'] = response.text
                 
-                # 2. Bild Generierung (OpenAI DALL-E 3)
-                # Wir extrahieren die ersten 150 Zeichen für einen präzisen Bild-Prompt
-                img_url = generate_visual(final_text[:200]) 
-                st.session_state['last_image'] = img_url
+                success = False
+                # Teste verschiedene Modell-Namen
+                for model_name in ["gemini-1.5-flash", "gemini-pro", "models/gemini-1.5-flash"]:
+                    try:
+                        model = genai.GenerativeModel(model_name, system_instruction=system_prompt)
+                        response = model.generate_content(final_text)
+                        st.session_state['last_result'] = response.text
+                        success = True
+                        break
+                    except:
+                        continue
                 
-                st.success("Text und horizontales Bild wurden erstellt!")
+                if not success:
+                    st.error("Google API Modell-Fehler. Bitte API-Key oder Modell-Verfügbarkeit prüfen.")
+                else:
+                    # 2. Bild Generierung (OpenAI DALL-E 3)
+                    img_url = generate_visual(final_text[:200]) 
+                    st.session_state['last_image'] = img_url
+                    st.success("Text und horizontales Bild wurden erstellt!")
 
         except Exception as e:
-            st.error(f"Fehler bei der Generierung: {e}")
+            st.error(f"Kritischer Fehler: {e}")
 
 # --- ANZEIGE & EXPORT ---
 if 'last_result' in st.session_state:
@@ -136,12 +145,11 @@ if 'last_result' in st.session_state:
     col_img, col_txt = st.columns([1, 1])
     
     with col_img:
-        st.markdown("### 🖼️ Generiertes Bild (Horizontal)")
+        st.markdown("### 🖼️ Beitragsbild (Horizontal 16:9)")
         if st.session_state.get('last_image'):
             st.image(st.session_state['last_image'], use_container_width=True)
-            st.caption("Format: 1792x1024 (Video-optimiert)")
         else:
-            st.info("Bild konnte nicht geladen werden.")
+            st.info("Bild wird generiert oder konnte nicht geladen werden.")
             
     with col_txt:
         st.markdown("### 📝 Generierter Text")
