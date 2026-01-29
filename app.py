@@ -1,69 +1,79 @@
 import streamlit as st
 import google.generativeai as genai
 
-st.set_page_config(page_title="PJ News Generator", page_icon="📝")
+# --- SEITEN KONFIGURATION ---
+st.set_page_config(page_title="PJ News Generator", page_icon="📝", layout="centered")
 
-# --- MASTER PROMPT ---
-SYSTEM_PROMPT = """
-Du bist erfahrene:r Fachredakteur:in beim "packaging journal".
-Erstelle aus dem Quelltext eine Online-News.
-REGELN: Trennung von Nachricht/Werbung, keine PR-Adjektive, sachlich, präzise.
-FORMAT:
-1. SEO-BOX (Keyword, Snippet)
-2. ARTIKEL (H1, Teaser fett, Body, Fazit)
-"""
+st.title("📝 PJ News-Generator V3")
+st.caption("Erstellt journalistische Meldungen für das packaging journal online.")
 
-st.title("📝 PJ News-Generator (V2)")
-
-# API Key Handling
+# --- SIDEBAR (API KEY) ---
+st.sidebar.header("Einstellungen")
 api_key = st.sidebar.text_input("Google API Key", type="password")
+
+# Fallback auf Secrets, falls im Feld nichts steht
 if not api_key and "GOOGLE_API_KEY" in st.secrets:
     api_key = st.secrets["GOOGLE_API_KEY"]
 
-source_text = st.text_area("Quelltext:", height=200)
+# --- HAUPTBEREICH: EINGABEN ---
 
-if st.button("Generieren ✨", type="primary"):
+# 1. Auswahl der Länge (Neu!)
+length_option = st.radio(
+    "Gewünschte Artikellänge:",
+    ["Kurz (~1.200 Zeichen)", "Normal (~2.500 Zeichen)", "Lang (~5.000 Zeichen)"],
+    horizontal=True
+)
+
+# 2. Textfeld
+source_text = st.text_area("Quelltext / Pressemitteilung einfügen:", height=250)
+
+# --- LOGIK: PROMPT BAUEN ---
+# Wir definieren die Längen-Instruktionen basierend auf der Auswahl
+if "Kurz" in length_option:
+    length_instruction = (
+        "ZIEL-LÄNGE: ca. 1.200 Zeichen.\n"
+        "STRUKTUR: Kompakter Fließtext ohne Zwischenüberschriften. Fokus auf die reine Nachricht."
+    )
+elif "Normal" in length_option:
+    length_instruction = (
+        "ZIEL-LÄNGE: ca. 2.500 Zeichen.\n"
+        "STRUKTUR: Gut lesbarer Artikel mit sinnvollen H2-Zwischenüberschriften zur Gliederung."
+    )
+else: # Lang
+    length_instruction = (
+        "ZIEL-LÄNGE: ca. 5.000 Zeichen.\n"
+        "STRUKTUR: Ausführlicher Deep-Dive-Artikel. Nutze viele H2-Zwischenüberschriften für gute Lesbarkeit."
+    )
+
+# Der Basis-Prompt mit deinen neuen Regeln
+SYSTEM_PROMPT = f"""
+Du bist erfahrene:r Fachredakteur:in beim "packaging journal". 
+Deine Zielgruppe sind Entscheider und Ingenieure der Verpackungsindustrie.
+Stil: Objektiv, präzise, branchennah.
+
+DEINE AUFGABE:
+Verwandle den Quelltext in einen Online-Artikel.
+
+REGELN (STRENG EINHALTEN):
+1. TITEL (H1): Maximal 6 Wörter! Muss griffig und knackig sein.
+2. SEO: Das Fokus-Keyword darf nur aus EINEM EINZIGEN WORT bestehen. Es muss im Titel und Text vorkommen.
+3. MARKETING-FILTER: Entferne PR-Floskeln ("stolz", "einzigartig", "state-of-the-art"). Firmennamen normal schreiben (keine Versalien). Rechtsformen (GmbH etc.) entfernen.
+4. {length_instruction}
+
+OUTPUT-FORMAT:
+1. SEO-BOX
+   - Fokus-Keyword (1 Wort)
+   - Meta Description (max 160 Zeichen, Klickreiz)
+   - Tags
+
+2. ARTIKEL
+   - H1 Titel (max 6 Wörter)
+   - Teaser (Fettgedruckt, der "Hook")
+   - Artikel-Body (gemäß Längenvorgabe)
+   - Fazit/Einordnung
+"""
+
+# --- GENERIERUNG ---
+if st.button("Artikel erstellen ✨", type="primary"):
     if not api_key:
-        st.error("Kein API Key gefunden.")
-        st.stop()
-    
-    try:
-        genai.configure(api_key=api_key)
-        
-        # AUTOMATISCHE MODELL-SUCHE
-        # Wir fragen die API: "Was hast du da?" und nehmen das Beste.
-        available_models = [m.name for m in genai.list_models()]
-        
-        # Bevorzugte Modelle in Reihenfolge
-        target_model = "models/gemini-1.5-flash"
-        if "models/gemini-1.5-flash" not in available_models:
-             # Fallback, falls Flash nicht da ist
-            if "models/gemini-pro" in available_models:
-                target_model = "models/gemini-pro"
-            else:
-                # Nimm einfach das erste, das generieren kann
-                target_model = available_models[0]
-
-        # Info für dich (damit wir sehen, was passiert)
-        st.caption(f"Nutze Modell: {target_model}")
-        
-        model = genai.GenerativeModel(
-            model_name=target_model,
-            system_instruction=SYSTEM_PROMPT
-        )
-        
-        with st.spinner("Schreibe Artikel..."):
-            response = model.generate_content(source_text)
-            st.markdown(response.text)
-
-    except Exception as e:
-        st.error(f"Fehler: {e}")
-        # DIAGNOSE-HILFE:
-        st.warning("Diagnose-Daten (bitte kopieren falls es nicht geht):")
-        try:
-            mods = genai.list_models()
-            st.write("Verfügbare Modelle für diesen Key:")
-            for m in mods:
-                st.write(f"- {m.name}")
-        except:
-            st.write("Konnte Modelle nicht auflisten.")
+        st.
