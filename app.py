@@ -6,6 +6,8 @@ import requests
 from bs4 import BeautifulSoup
 from docx import Document
 from io import BytesIO
+from openai import OpenAI
+import os
 
 # --- KONFIGURATION & BRANDING ---
 st.set_page_config(page_title="packaging journal Redaktions Tool", page_icon="🚀", layout="wide")
@@ -46,25 +48,22 @@ def create_docx(text):
     doc.save(bio)
     return bio.getvalue()
 
-def export_to_wordpress(title, content):
-    wp_url = st.secrets.get("WP_URL")
-    wp_user = st.secrets.get("WP_USER")
-    wp_pw = st.secrets.get("WP_APP_PW")
-    
-    if not all([wp_url, wp_user, wp_pw]):
-        return "❌ WP-Daten fehlen in den Secrets!"
-
-    endpoint = f"{wp_url.rstrip('/')}/wp-json/wp/v2/posts"
-    payload = {"title": title, "content": content, "status": "draft"}
-    
+def generate_visual(topic):
+    """Generiert ein horizontales Bild passend zum Thema via DALL-E 3"""
     try:
-        res = requests.post(endpoint, json=payload, auth=(wp_user, wp_pw), timeout=15)
-        if res.status_code == 201: 
-            return "✅ Erfolg: Der Entwurf wurde in WordPress angelegt!"
-        else: 
-            return f"❌ WP-Fehler: {res.status_code} (Prüfe User/App-Passwort)"
-    except Exception as e: 
-        return f"❌ Verbindung fehlgeschlagen: {str(e)}"
+        client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+        # Festgelegtes Format: Horizontal (1792x1024)
+        response = client.images.generate(
+            model="dall-e-3",
+            prompt=f"Professional high-end photography for the packaging industry, theme: {topic}. Cinematic lighting, 8k, horizontal wide angle, photorealistic, no text.",
+            size="1792x1024", 
+            quality="standard",
+            n=1
+        )
+        return response.data[0].url
+    except Exception as e:
+        st.error(f"Bildfehler: {e}")
+        return None
 
 # --- HAUPTBEREICH ---
 st.title("🚀 packaging journal Redaktions Tool")
@@ -113,50 +112,45 @@ if st.button(f"✨ {modus.upper()} JETZT GENERIEREN", type="primary"):
         st.warning("Bitte Material bereitstellen.")
     else:
         try:
-            with st.spinner("KI generiert den Text..."):
+            with st.spinner("KI generiert Text und Bild..."):
+                # 1. Text Generierung (Google Gemini)
                 genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-                
-                # Modellauswahl
-                available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-                target_model = "models/gemini-1.5-flash"
-                if target_model not in available_models:
-                    target_model = "models/gemini-pro" if "models/gemini-pro" in available_models else available_models[0]
-                
-                model = genai.GenerativeModel(target_model, system_instruction=system_prompt)
+                model = genai.GenerativeModel("gemini-1.5-flash", system_instruction=system_prompt)
                 response = model.generate_content(final_text)
-                
-                # Speichern im Session State
                 st.session_state['last_result'] = response.text
-                st.success("Text erfolgreich generiert!")
+                
+                # 2. Bild Generierung (OpenAI DALL-E 3)
+                # Wir extrahieren die ersten 150 Zeichen für einen präzisen Bild-Prompt
+                img_url = generate_visual(final_text[:200]) 
+                st.session_state['last_image'] = img_url
+                
+                st.success("Text und horizontales Bild wurden erstellt!")
 
         except Exception as e:
-            st.error(f"Fehler: {e}")
+            st.error(f"Fehler bei der Generierung: {e}")
 
-# EXPORT SEKTION (nur anzeigen wenn Text vorhanden ist)
+# --- ANZEIGE & EXPORT ---
 if 'last_result' in st.session_state:
     st.divider()
-    st.markdown(st.session_state['last_result'])
     
-    st.markdown("### 📥 Export & CMS")
-    c1, c2 = st.columns(2)
+    col_img, col_txt = st.columns([1, 1])
     
-    with c1:
-        st.download_button(
-            label="📄 Word-Download (.docx)", 
-            data=create_docx(st.session_state['last_result']), 
-            file_name="PJ_Beitrag.docx"
-        )
+    with col_img:
+        st.markdown("### 🖼️ Generiertes Bild (Horizontal)")
+        if st.session_state.get('last_image'):
+            st.image(st.session_state['last_image'], use_container_width=True)
+            st.caption("Format: 1792x1024 (Video-optimiert)")
+        else:
+            st.info("Bild konnte nicht geladen werden.")
+            
+    with col_txt:
+        st.markdown("### 📝 Generierter Text")
+        st.markdown(st.session_state['last_result'])
     
-    with c2:
-        if st.button("🌐 In WordPress exportieren (Entwurf)"):
-            with st.spinner("Sende Daten an WordPress..."):
-                lines = st.session_state['last_result'].split('\n')
-                title_candidate = next((l for l in lines if l.strip() and "SEO" not in l and "Keyword" not in l), "Neuer Beitrag")
-                clean_title = title_candidate.strip("# ").strip()
-                
-                msg = export_to_wordpress(clean_title, st.session_state['last_result'])
-                
-                if "✅" in msg:
-                    st.success(msg)
-                else:
-                    st.error(msg)
+    st.divider()
+    st.markdown("### 📥 Export")
+    st.download_button(
+        label="📄 Word-Download (.docx)", 
+        data=create_docx(st.session_state['last_result']), 
+        file_name="PJ_Beitrag.docx"
+    )
