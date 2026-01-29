@@ -76,4 +76,39 @@ OUTPUT-FORMAT:
 # --- GENERIERUNG ---
 if st.button("Artikel erstellen ✨", type="primary"):
     if not api_key:
-        st.
+        st.error("Bitte API Key hinterlegen.")
+        st.stop()
+    
+    if not source_text:
+        st.warning("Bitte erst einen Text eingeben.")
+        st.stop()
+
+    try:
+        with st.spinner("Die Redaktions-KI arbeitet..."):
+            genai.configure(api_key=api_key)
+            
+            # Automatische Modell-Wahl (wie beim letzten Mal, da das stabil war)
+            available_models = [m.name for m in genai.list_models()]
+            target_model = "models/gemini-1.5-flash" # Standard: Schnell & Gut
+            
+            # Fallback Logik
+            if target_model not in available_models:
+                if "models/gemini-pro" in available_models:
+                    target_model = "models/gemini-pro"
+                else:
+                    target_model = available_models[0]
+
+            model = genai.GenerativeModel(
+                model_name=target_model,
+                system_instruction=SYSTEM_PROMPT
+            )
+            
+            response = model.generate_content(source_text)
+            
+            # Ergebnis anzeigen
+            st.success(f"Fertig! ({length_option.split(' ')[0]})")
+            st.markdown("---")
+            st.markdown(response.text)
+
+    except Exception as e:
+        st.error(f"Ein Fehler ist aufgetreten: {e}")
