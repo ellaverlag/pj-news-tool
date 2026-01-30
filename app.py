@@ -38,13 +38,47 @@ def reset_app():
         if k in st.session_state: del st.session_state[k]
 
 # --- HILFSFUNKTIONEN ---
+
 def get_google_model():
-    # Wir nehmen hart codiert das Standard-Modell, um Listen-Fehler zu vermeiden
+    """Sucht automatisch das beste verfügbare Modell, um 404-Fehler zu vermeiden."""
     try:
         genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-        return genai.GenerativeModel('gemini-1.5-flash')
+        
+        # 1. Liste aller Modelle abrufen, die Content generieren können
+        all_models = [m for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        model_names = [m.name for m in all_models]
+        
+        # 2. Prioritätenliste (Wir suchen erst nach Flash, dann Pro)
+        preferences = [
+            "models/gemini-1.5-flash",
+            "models/gemini-1.5-flash-latest",
+            "models/gemini-1.5-flash-001",
+            "models/gemini-1.5-pro",
+            "models/gemini-1.5-pro-latest",
+            "models/gemini-pro"
+        ]
+        
+        selected_model = None
+        
+        # Prüfen, ob einer der Favoriten verfügbar ist
+        for p in preferences:
+            if p in model_names:
+                selected_model = p
+                break
+        
+        # Fallback: Wenn keiner der Favoriten da ist, nimm das erste verfügbare Modell
+        if not selected_model and model_names:
+            selected_model = model_names[0]
+            
+        if selected_model:
+            # st.success(f"Nutze Modell: {selected_model}") # Optional: Anzeigen welches Modell läuft
+            return genai.GenerativeModel(selected_model)
+        else:
+            st.error("Kritischer Fehler: Keine Google AI Modelle in diesem Account gefunden.")
+            return None
+
     except Exception as e:
-        st.error(f"Fehler bei Google Config: {e}")
+        st.error(f"Fehler bei der Modell-Auswahl: {e}")
         return None
 
 def generate_horizontal_image(topic):
@@ -243,12 +277,12 @@ if st.button("✨ INHALTE GENERIEREN", type="primary"):
         with st.spinner("KI arbeitet..."):
             is_social = "LinkedIn" in modus or "Social" in modus
             
-            # Bild laden für Social (vom Link)
+            # Bild laden für Social (vom Link) - JETZT ROBUST
             if is_social and url_in:
                 og = get_website_og_image(url_in)
                 if og: st.session_state['og_img'] = og
             
-            # Text Generierung
+            # Text Generierung mit Auto-Modell-Wahl
             model = get_google_model()
             if model:
                 pmt = f"{system_prompt}\nFOKUS: {custom_focus}\nLINK: {url_in}\nMATERIAL:\n{final_text}"
@@ -256,7 +290,6 @@ if st.button("✨ INHALTE GENERIEREN", type="primary"):
                     resp = model.generate_content(pmt)
                     st.session_state['res'] = resp.text
                 except Exception as e:
-                    # HIER IST DIE WICHTIGE ÄNDERUNG ZUR FEHLERANZEIGE
                     st.error(f"GENAUER FEHLER: {e}")
             
             # Bild KI Generierung (nur wenn nicht Social)
@@ -333,7 +366,7 @@ if 'res' in st.session_state:
                     st.markdown("**Text:**"); st.code(o_text, language=None)
                     st.markdown("**Stand:**"); st.code(o_stand, language=None)
             else:
-                st.error("Formatierungs-Fehler. KI-Rohtext:")
+                st.error("Formatierungs-Fehler der KI. Hier ist der Rohtext:")
                 st.write(res)
         except: st.write(res)
 
