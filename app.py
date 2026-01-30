@@ -22,6 +22,10 @@ st.markdown("""
     }
     .stCode { border: 1px solid #24A27F !important; border-radius: 5px; background-color: #ffffff !important; }
     h3 { color: #24A27F; margin-top: 20px; }
+    div[data-baseweb="tab-list"] button[aria-selected="true"] {
+        background-color: #24A27F !important;
+        color: white !important;
+    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -55,7 +59,7 @@ def get_best_google_model():
 def generate_horizontal_image(topic):
     try:
         client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
-        # Festgelegtes horizontales Format (16:9) gemäß deinem Wunsch
+        # Festgelegtes horizontales Format (16:9)
         response = client.images.generate(
             model="dall-e-3",
             prompt=f"Professional industrial photography for packaging industry, theme: {topic}. High-end cinematic lighting, 16:9 horizontal, photorealistic, no text.",
@@ -64,58 +68,108 @@ def generate_horizontal_image(topic):
         return response.data[0].url
     except: return None
 
-def create_docx(text):
+def create_docx(text_content):
     doc = Document()
-    for line in text.split('\n'):
+    for line in text_content.split('\n'):
         if line.strip(): doc.add_paragraph(line)
     bio = BytesIO()
     doc.save(bio)
     return bio.getvalue()
 
+def clean_text(text):
+    """Entfernt Markdown-Sterne und bereinigt den Text"""
+    if not text: return ""
+    return text.replace('**', '').replace('__', '').strip()
+
 # --- PROMPT LOGIK ---
-base_constraints = """
-WICHTIGE REDAKTIONELLE REGELN:
-- KEIN Markdown verwenden (KEINE **, KEINE #, KEINE _). Reintext!
-- KEINE Ortsmarke, KEIN Datum am Anfang.
-- KEIN 'Über Firma XY' oder Hintergrund-Unternehmensprofile.
-- KEIN PR-Sprech wie 'Besuchen Sie uns', 'Wir freuen uns'. Journalistisch neutral bleiben.
-- Einstiege VARIATION: Nicht mit 'Firma XY präsentiert' starten. Nutze Problemstellungen, Use Cases oder Trends.
-- Firmennamen normal (nicht VERSAL).
+
+# Gemeinsame Basis-Regeln aus dem Masterprompt
+base_rules = """
+ROLLE: Fachjournalist:in des packaging journal.
+ZIELGRUPPE: Entscheider, Ingenieure, Planer.
+TON: Journalistisch, sachlich, präzise, branchennah. KEINE Werbung, KEIN PR-Sprech.
+STILREGELN (STRICT):
+- Kein PR-Fluff: Streiche unbelegte Superlative.
+- Firmennamen normal schreiben (keine Versalien).
+- Rechtsformen (GmbH/AG) entfernen.
+- Keine Marken-Symbole (R/TM).
+- Keine Sätze wie 'Besuchen Sie uns' oder 'Wir freuen uns'.
+- KEIN 'Über Firma XY'-Block am Ende.
+- KEIN Datum und KEINE Ortsmarke am Anfang.
+- Einstiege VARIIEREN (Use Case, Trend, Engpass...). Nicht immer 'Firma XY präsentiert'.
+- FORMATIERUNG: Antworte als REINER TEXT ohne Markdown-Formatierung (keine Fettschrift durch Sternchen).
 """
 
 if modus == "Messe-Vorbericht (Special)":
     selected_messe = st.sidebar.selectbox("Messe:", ["LogiMat", "interpack", "Fachpack", "SPS"])
-    l_opt = st.radio("Print-Länge (Strikt einhalten):", ["KURZ (~900)", "NORMAL (~1300)", "LANG (~2000)"], horizontal=True)
+    # Neue Print-Längen Definition
+    l_opt = st.radio("PRINT-Länge (gilt nur für Print-Version):", ["KURZ (ca. 900 Zeichen)", "NORMAL (ca. 1300 Zeichen)", "LANG (ca. 2000 Zeichen)"], horizontal=True)
+    
     m_links = {"LogiMat": "https://www.logimat-messe.de/de/die-messe/ausstellerliste", "interpack": "https://www.interpack.de/de/Aussteller_Produkte/Ausstellerverzeichnis", "Fachpack": "https://www.fachpack.de/de/aussteller-produkte/ausstellerliste", "SPS": "https://sps.mesago.com/nuernberg/de/ausstellersuche.html"}
     m_link = m_links.get(selected_messe, "")
-    target_len = l_opt.split("~")[1].replace(")", "")
+    
+    # Extrahiere Ziel-Zeichenzahl für Print
+    target_print_len = "900"
+    if "1300" in l_opt: target_print_len = "1300"
+    if "2000" in l_opt: target_print_len = "2000"
 
     system_prompt = f"""
-    Rolle: Fachredakteur:in beim packaging journal.
-    {base_constraints}
+    {base_rules}
+    AUFGABE: Erstelle zwei Versionen für ein {selected_messe}-Special.
     
-    AUFGABE: Erstelle zwei Versionen für {selected_messe}. 
+    --- TEIL 1: PRINT-VERSION ---
+    VORGABE: Exakt ca. {target_print_len} Zeichen.
+    STRUKTUR:
+    - Oberzeile: [Firma]
+    - Headline: [Max 6 Wörter, prägnant]
+    - Text: SOFORTIGER EINSTIEG ins Thema. KEIN Anleser.
+    - Footer: Website ({m_link}) | Halle/Stand (nur wenn bekannt, sonst 'Halle ??, Stand ??').
     
-    1. PRINT: 
-    - Länge: EXAKT ca. {target_len} Zeichen. 
-    - Struktur: Oberzeile (Firma), Headline, Text (SOFORTIGER EINSTIEG OHNE ANLESER), Website ({m_link}), Halle/Standnummer.
-    
-    2. ONLINE: 
-    - Länge: 2500-5000 Zeichen.
-    - Struktur: Headline, Anleser (MAX 300 Zeichen), Haupttext mit H2-Zwischenüberschriften (ohne #), Halle/Standnummer, SEO-Snippet (max 160).
-    
-    FORMAT-VORGABE:
-    [PRINT_TITEL]...[PRINT_TEXT]...[PRINT_STAND]
-    [ONLINE_TITEL]...[ONLINE_ANLESER]...[ONLINE_TEXT]...[ONLINE_SNIPPET]
+    --- TEIL 2: ONLINE-VERSION ---
+    VORGABE: Standardlänge 2500-5000 Zeichen.
+    STRUKTUR:
+    - Headline: [Max 6 Wörter]
+    - Anleser: [Max 300 Zeichen, 2-3 Sätze]
+    - Text: [Mit Zwischenüberschriften, journalistisch tiefgehend]
+    - Footer: Halle/Stand.
+    - SEO: Fokus-Keyword, Meta Description (max 160), Tags.
+
+    FORMAT-AUSGABE (Nutze exakt diese Trenner):
+    [P_OBERZEILE]...[P_HEADLINE]...[P_TEXT]...[P_WEB]...[P_STAND]
+    [O_HEADLINE]...[O_ANLESER]...[O_TEXT]...[O_STAND]...[O_KEYWORD]...[O_DESC]...[O_TAGS]
     """
-else:
-    l_opt = st.radio("Länge:", ["Kurz (~1200)", "Normal (~2500)", "Lang (~5000)"], horizontal=True)
-    system_prompt = f"Erstelle eine Standard-News. {base_constraints} Headline, Anleser (MAX 300 Zeichen), Text, Snippet. Länge: {l_opt}."
+
+else: # Standard Online-News
+    # Neue Längen-Definitionen für Online-News
+    l_opt = st.radio("Länge:", [
+        "KURZ (2.000–4.000 Zeichen)", 
+        "NORMAL (6.000–9.000 Zeichen)", 
+        "LANG (12.000–15.000 Zeichen)"
+    ], horizontal=True)
+    
+    len_instruction = "2000-4000 Zeichen"
+    if "NORMAL" in l_opt: len_instruction = "6000-9000 Zeichen, mit H2 Zwischenüberschriften"
+    if "LANG" in l_opt: len_instruction = "12000-15000 Zeichen, mit H2 Zwischenüberschriften"
+
+    system_prompt = f"""
+    {base_rules}
+    AUFGABE: Erstelle eine Fach-News für Online.
+    LÄNGE: {len_instruction}.
+    
+    STRUKTUR:
+    1. Titel: Max 6 Wörter, sachlich, kein Clickbait.
+    2. Anleser: Max 300 Zeichen, neutral.
+    3. Haupttext: Fließtext, journalistisch, keine PR.
+    4. SEO: Snippet (max 160 Zeichen), Fokus-Keyword.
+    
+    FORMAT-AUSGABE (Nutze exakt diese Trenner):
+    [TITEL]...[ANLESER]...[TEXT]...[SNIPPET]...[KEYWORD]
+    """
 
 # --- INPUTS ---
 url_in = st.text_input("Link (URL):")
 file_in = st.file_uploader("Datei:", type=["pdf", "docx", "txt"])
-text_in = st.text_area("Oder Text einfügen:")
+text_in = st.text_area("Oder Text einfügen:", height=150)
 
 # Extraktion
 final_text = ""
@@ -132,55 +186,152 @@ elif file_in:
 else: final_text = text_in
 
 # --- GENERIERUNG ---
-if st.button("✨ JETZT GENERIEREN", type="primary"):
+if st.button("✨ INHALTE GENERIEREN", type="primary"):
     if len(final_text) < 20:
         st.warning("Bitte Material bereitstellen.")
     else:
-        with st.spinner("KI erstellt Inhalte..."):
+        with st.spinner("KI arbeitet nach Masterprompt..."):
             model_name = get_best_google_model()
             if model_name:
                 model = genai.GenerativeModel(model_name)
-                response = model.generate_content(f"{system_prompt}\n\nMATERIAL: {final_text}")
+                # Wir geben der KI den Prompt + das Material
+                full_input = f"{system_prompt}\n\nQUELLMATERIAL:\n{final_text}"
+                response = model.generate_content(full_input)
                 st.session_state['res'] = response.text
+                
+                # Bild generieren (nur bei Online News oder wenn gewünscht auch bei Messe)
+                # Da Messe-Vorberichte oft vom Hersteller Bildmaterial haben, ist es hier optional nützlich.
                 if generate_img_flag:
                     st.session_state['img'] = generate_horizontal_image(final_text[:200])
+                else:
+                    st.session_state['img'] = None
 
-# --- AUSGABE ---
+# --- AUSGABE LOGIK ---
 if 'res' in st.session_state:
     res = st.session_state['res']
     
-    tab_p, tab_o = st.tabs(["📟 PRINT VERSION", "🌐 ONLINE (WordPress)"])
-    
-    with tab_p:
+    # MESSE VORBERICHT AUSGABE
+    if modus == "Messe-Vorbericht (Special)":
+        tab_p, tab_o = st.tabs(["📟 PRINT VERSION", "🌐 ONLINE VERSION"])
+        
+        with tab_p:
+            try:
+                # Parsing Print
+                p_ober = res.split('[P_OBERZEILE]')[1].split('[P_HEADLINE]')[0]
+                p_head = res.split('[P_HEADLINE]')[1].split('[P_TEXT]')[0]
+                p_text = res.split('[P_TEXT]')[1].split('[P_WEB]')[0]
+                p_web  = res.split('[P_WEB]')[1].split('[P_STAND]')[0]
+                p_stand= res.split('[P_STAND]')[1].split('[O_HEADLINE]')[0] # Stoppt vor Online Teil
+
+                # Bereinigen
+                p_ober = clean_text(p_ober)
+                p_head = clean_text(p_head)
+                p_text = clean_text(p_text)
+                p_web  = clean_text(p_web)
+                p_stand= clean_text(p_stand)
+                
+                full_print_doc = f"{p_ober}\n\n{p_head}\n\n{p_text}\n\n{p_web}\n{p_stand}"
+                
+                st.subheader("Vorschau Print")
+                st.text(full_print_doc) # Einfache Textanzeige zur Kontrolle
+                
+                st.subheader("Kopieren & Export")
+                st.code(full_print_doc, language=None)
+                st.download_button("📄 Word-Export (Nur Print)", data=create_docx(full_print_doc), file_name="PJ_Print_Beitrag.docx")
+            except Exception as e:
+                st.error("Formatierung nicht erkannt. Rohausgabe:")
+                st.write(res)
+
+        with tab_o:
+            try:
+                # Parsing Online
+                # Suche ab dem Online Teil, falls Print Tags stören
+                part_online = res.split('[O_HEADLINE]')[1]
+                
+                o_head = part_online.split('[O_ANLESER]')[0]
+                o_anle = part_online.split('[O_ANLESER]')[1].split('[O_TEXT]')[0]
+                o_text = part_online.split('[O_TEXT]')[1].split('[O_STAND]')[0]
+                o_stand= part_online.split('[O_STAND]')[1].split('[O_KEYWORD]')[0]
+                o_key  = part_online.split('[O_KEYWORD]')[1].split('[O_DESC]')[0]
+                o_desc = part_online.split('[O_DESC]')[1].split('[O_TAGS]')[0]
+                o_tags = part_online.split('[O_TAGS]')[1]
+
+                # Bereinigen
+                o_head = clean_text(o_head)
+                o_anle = clean_text(o_anle)
+                o_text = clean_text(o_text)
+                o_stand= clean_text(o_stand)
+                o_key  = clean_text(o_key)
+                o_desc = clean_text(o_desc)
+                o_tags = clean_text(o_tags)
+
+                if st.session_state.get('img'):
+                    st.image(st.session_state['img'], caption="Beitragsbild (16:9)", width=800)
+                
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.markdown("### 📝 Inhalt")
+                    st.caption("Titel (max 6 Wörter)")
+                    st.code(o_head, language=None)
+                    st.caption("Anleser (max 300 Zeichen)")
+                    st.code(o_anle, language=None)
+                    st.caption("Haupttext")
+                    st.code(o_text, language=None)
+                    st.caption("Standinfo")
+                    st.code(o_stand, language=None)
+                
+                with c2:
+                    st.markdown("### 🔍 SEO Box")
+                    st.caption("Fokus Keyword")
+                    st.code(o_key, language=None)
+                    st.caption("Meta Description (max 160)")
+                    st.code(o_desc, language=None)
+                    st.caption("Tags")
+                    st.code(o_tags, language=None)
+
+            except Exception as e:
+                st.write(res) # Fallback
+
+    # STANDARD ONLINE NEWS AUSGABE
+    else:
         try:
-            p_titel = res.split('[PRINT_TITEL]')[1].split('[PRINT_TEXT]')[0].replace('*', '').strip()
-            p_text = res.split('[PRINT_TEXT]')[1].split('[PRINT_STAND]')[0].replace('*', '').strip()
-            p_stand = res.split('[PRINT_STAND]')[1].replace('*', '').strip()
+            # Parsing
+            tit = res.split('[TITEL]')[1].split('[ANLESER]')[0]
+            anl = res.split('[ANLESER]')[1].split('[TEXT]')[0]
+            txt = res.split('[TEXT]')[1].split('[SNIPPET]')[0]
+            sni = res.split('[SNIPPET]')[1].split('[KEYWORD]')[0]
+            key = res.split('[KEYWORD]')[1]
+
+            # Bereinigen
+            tit = clean_text(tit)
+            anl = clean_text(anl)
+            txt = clean_text(txt)
+            sni = clean_text(sni)
+            key = clean_text(key)
             
-            full_print = f"{p_titel}\n\n{p_text}\n\n{p_stand}"
-            st.subheader("Kopier-Box (Nur Text)")
-            st.code(full_print, language=None)
-            st.download_button("📄 Word-Export (Nur Print)", data=create_docx(full_print), file_name="PJ_Print_Beitrag.docx")
-        except:
-            st.code(res.replace('*', ''), language=None)
-
-    with tab_o:
-        try:
-            o_titel = res.split('[ONLINE_TITEL]')[1].split('[ONLINE_ANLESER]')[0].replace('*', '').strip()
-            o_anleser = res.split('[ONLINE_ANLESER]')[1].split('[ONLINE_TEXT]')[0].replace('*', '').strip()
-            o_text = res.split('[ONLINE_TEXT]')[1].split('[ONLINE_SNIPPET]')[0].replace('*', '').strip()
-            o_snippet = res.split('[ONLINE_SNIPPET]')[1].replace('*', '').strip()
-
             if st.session_state.get('img'):
-                st.image(st.session_state['img'], caption="Horizontales Beitragsbild (16:9)", width=800)
+                st.image(st.session_state['img'], caption="Beitragsbild (16:9)", width=800)
             
-            st.subheader("📌 WordPress Titel")
-            st.code(o_titel, language=None)
-            st.subheader("📰 Anleser / Teaser (max 300 Zeichen)")
-            st.code(o_anleser, language=None)
-            st.subheader("✍️ Haupttext")
-            st.code(o_text, language=None)
-            st.subheader("🔍 Google Snippet")
-            st.code(o_snippet, language=None)
-        except:
-            st.code(res.replace('*', ''), language=None)
+            c1, c2 = st.columns([2, 1])
+            with c1:
+                st.subheader("Inhalt")
+                st.caption("Titel")
+                st.code(tit, language=None)
+                st.caption("Anleser")
+                st.code(anl, language=None)
+                st.caption("Text")
+                st.code(txt, language=None)
+            
+            with c2:
+                st.subheader("SEO")
+                st.caption("Fokus Keyword")
+                st.code(key, language=None)
+                st.caption("Snippet")
+                st.code(sni, language=None)
+                
+            full_doc = f"{tit}\n\n{anl}\n\n{txt}"
+            st.download_button("📄 Word-Export", data=create_docx(full_doc), file_name="PJ_Online_News.docx")
+
+        except Exception as e:
+            st.error("Konnte Struktur nicht parsen. Rohdaten:")
+            st.write(res)
