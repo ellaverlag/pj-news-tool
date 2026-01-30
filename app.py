@@ -67,7 +67,8 @@ st.sidebar.markdown("---")
 modus = st.sidebar.radio("Erstellungs-Modus:", [
     "Standard Online-News", 
     "Messe-Vorbericht (Special)",
-    "LinkedIn Post (English)"
+    "LinkedIn Post (English)",
+    "Social Media (Deutsch)"
 ])
 
 # 2. MESSE AUSWAHL (Nur aktiv bei Messe)
@@ -86,9 +87,11 @@ if modus == "Messe-Vorbericht (Special)":
 st.sidebar.markdown("---")
 
 # 3. OPTIONEN & RESET
-# Bild-Option ausblenden bei LinkedIn, da wir das Web-Bild nehmen
+# Bild-Option ausblenden bei Social Media, da wir das Web-Bild nehmen
 generate_img_flag = True
-if modus != "LinkedIn Post (English)":
+if "Social Media" in modus or "LinkedIn" in modus:
+    generate_img_flag = False
+else:
     generate_img_flag = st.sidebar.checkbox("KI-Beitragsbild generieren?", value=True)
 
 st.sidebar.button("🗑️ ALLES LÖSCHEN / NEU", on_click=reset_app, type="secondary")
@@ -208,7 +211,33 @@ if modus == "LinkedIn Post (English)":
     - If a specific company is mentioned, mention them (but without @ tagging, just text).
     """
 
-# 2. MESSE VORBERICHT
+# 2. SOCIAL MEDIA DEUTSCH
+elif modus == "Social Media (Deutsch)":
+    system_prompt = """
+    ROLLE: Social Media Manager für das 'packaging journal'.
+    AUFGABE: Erstelle Posts für deutsche Kanäle basierend auf Input/URL.
+    STIL: Professionell, branchennah, Emojis nutzen (📦, 🏗️, ♻️).
+    
+    OUTPUT 1: LinkedIn Post (Deutsch)
+    - Hook: Ein starker Satz zum Einstieg.
+    - Key Points: 2-3 Bullet Points mit den wichtigsten Fakten.
+    - Call to Action: Nutze Pfeil ➡️ oder Link 🔗 Emoji gefolgt direkt von der URL (kein "Mehr lesen" Text).
+    - Hashtags: #packaging plus 3-4 passende deutsche oder englische Fach-Tags.
+    
+    OUTPUT 2: X / Twitter Post (Deutsch)
+    - Maximal 270 Zeichen (inklusive Link und Hashtags).
+    - Kurz, knackig, Newswert.
+    - URL einfügen.
+    
+    FORMAT-AUSGABE (Nutze exakt diese Trenner):
+    [LINKEDIN]...[TWITTER]
+    
+    WICHTIG:
+    - KEINE Markdown-Formatierung (**).
+    - Firmennamen normal schreiben.
+    """
+
+# 3. MESSE VORBERICHT
 elif modus == "Messe-Vorbericht (Special)":
     l_opt = st.radio("PRINT-Länge (gilt nur für Print-Version):", ["KURZ (ca. 900 Zeichen)", "NORMAL (ca. 1300 Zeichen)", "LANG (ca. 2000 Zeichen)"], horizontal=True)
     
@@ -242,7 +271,7 @@ elif modus == "Messe-Vorbericht (Special)":
     [O_HEADLINE]...[O_ANLESER]...[O_TEXT]...[O_STAND]...[O_KEYWORD]...[O_DESC]...[O_TAGS]
     """
 
-# 3. STANDARD ONLINE NEWS
+# 4. STANDARD ONLINE NEWS
 else:
     l_opt = st.radio("Länge:", [
         "KURZ (2.000–4.000 Zeichen)", 
@@ -294,8 +323,9 @@ if st.button("✨ INHALTE GENERIEREN", type="primary"):
     else:
         with st.spinner("KI arbeitet..."):
             
-            # 1. Bild holen, falls URL und LinkedIn Modus
-            if modus == "LinkedIn Post (English)" and url_in:
+            # 1. Bild holen, falls URL und Social Modus
+            is_social = "LinkedIn" in modus or "Social Media" in modus
+            if is_social and url_in:
                 og_link = get_website_og_image(url_in)
                 if og_link: st.session_state['og_img'] = og_link
             
@@ -307,7 +337,7 @@ if st.button("✨ INHALTE GENERIEREN", type="primary"):
                 full_input = f"{system_prompt}"
                 if custom_focus:
                     full_input += f"\n\nZUSATZ-ANWEISUNG: {custom_focus}"
-                if modus == "LinkedIn Post (English)" and url_in:
+                if is_social and url_in:
                     full_input += f"\n\nLINK TO ARTICLE: {url_in}"
                 
                 full_input += f"\n\nQUELLMATERIAL:\n{final_text}"
@@ -315,8 +345,8 @@ if st.button("✨ INHALTE GENERIEREN", type="primary"):
                 response = model.generate_content(full_input)
                 st.session_state['res'] = response.text
                 
-                # Bild generieren (nur wenn nicht LinkedIn Modus, dort nehmen wir Web-Bild)
-                if generate_img_flag and modus != "LinkedIn Post (English)":
+                # Bild generieren (nur wenn NICHT Social Media, dort Web-Bild)
+                if generate_img_flag and not is_social:
                     st.session_state['img'] = generate_horizontal_image(final_text[:200])
                 else:
                     st.session_state['img'] = None
@@ -325,23 +355,41 @@ if st.button("✨ INHALTE GENERIEREN", type="primary"):
 if 'res' in st.session_state:
     res = st.session_state['res']
     
-    # 1. LINKEDIN POST
+    # 1. LINKEDIN ENGLISCH
     if modus == "LinkedIn Post (English)":
         st.subheader("LinkedIn Post (English)")
-        
-        # Zeige das Bild der Website, falls gefunden
         if 'og_img' in st.session_state:
             st.image(st.session_state['og_img'], caption=f"Vorschau-Bild von: {url_in}", width=600)
         
         st.code(res, language=None)
-        st.caption("Einfach oben rechts kopieren und bei LinkedIn einfügen.")
-        
-        save_to_history("LinkedIn Post", res[:50] + "...")
+        save_to_history("LinkedIn EN", res[:50] + "...")
 
-    # 2. MESSE VORBERICHT
+    # 2. SOCIAL MEDIA DEUTSCH (Linked + Twitter)
+    elif modus == "Social Media (Deutsch)":
+        st.subheader("Social Media (Deutsch)")
+        if 'og_img' in st.session_state:
+            st.image(st.session_state['og_img'], caption=f"Vorschau-Bild von: {url_in}", width=600)
+        
+        try:
+            li_post = res.split('[LINKEDIN]')[1].split('[TWITTER]')[0].strip()
+            tw_post = res.split('[TWITTER]')[1].strip()
+            
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown("### LinkedIn (Deutsch)")
+                st.code(li_post, language=None)
+            with c2:
+                st.markdown("### X / Twitter (max 270)")
+                st.code(tw_post, language=None)
+                
+            save_to_history("Social DE", li_post[:50] + "...")
+            
+        except:
+            st.write(res)
+
+    # 3. MESSE VORBERICHT
     elif modus == "Messe-Vorbericht (Special)":
         try:
-            # Print
             if '[P_OBERZEILE]' in res:
                 p_ober = clean_text(res.split('[P_OBERZEILE]')[1].split('[P_HEADLINE]')[0])
                 p_head = clean_text(res.split('[P_HEADLINE]')[1].split('[P_TEXT]')[0])
@@ -353,7 +401,6 @@ if 'res' in st.session_state:
             else:
                 p_ober, p_head, p_text, p_web, p_stand = "???", "Fehler", res, "???", "???"
 
-            # Online
             if '[O_HEADLINE]' in res:
                 part_online = res.split('[O_HEADLINE]')[1]
                 o_head = clean_text(part_online.split('[O_ANLESER]')[0])
@@ -372,7 +419,6 @@ if 'res' in st.session_state:
                 full_print_doc = f"{p_ober}\n\n{p_head}\n\n{p_text}\n\n{p_web}\n{p_stand}"
                 st.subheader("Vorschau Print")
                 st.text(full_print_doc)
-                st.subheader("Kopieren")
                 st.code(full_print_doc, language=None)
                 st.download_button("📄 Word-Export (Print)", data=create_docx(full_print_doc), file_name="PJ_Print_Beitrag.docx")
 
@@ -404,7 +450,7 @@ if 'res' in st.session_state:
             st.error("Fehler beim Verarbeiten.")
             st.write(res)
 
-    # 3. STANDARD NEWS
+    # 4. STANDARD NEWS
     else:
         try:
             if '[TITEL]' in res:
