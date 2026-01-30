@@ -63,9 +63,13 @@ if pw_input != st.secrets.get("TOOL_PASSWORD", "pj-redaktion-2026"):
 st.sidebar.markdown("---")
 
 # 1. ERSTELLUNGS-MODUS
-modus = st.sidebar.radio("Erstellungs-Modus:", ["Standard Online-News", "Messe-Vorbericht (Special)"])
+modus = st.sidebar.radio("Erstellungs-Modus:", [
+    "Standard Online-News", 
+    "Messe-Vorbericht (Special)",
+    "LinkedIn Post (English)"
+])
 
-# 2. MESSE AUSWAHL (Direkt darunter, wenn aktiv)
+# 2. MESSE AUSWAHL (Nur aktiv bei Messe)
 selected_messe = ""
 m_link = ""
 if modus == "Messe-Vorbericht (Special)":
@@ -89,7 +93,6 @@ HISTORY_FILE = "news_history.csv"
 
 def save_to_history(titel, inhalt_snippet):
     datum = datetime.now().strftime("%d.%m. %H:%M")
-    # Bereinigung gegen CSV-Fehler
     if not titel or str(titel).lower() == 'nan': titel = "Unbekannter Titel"
     clean_titel = str(titel).replace(';', '').replace('\n', ' ').strip()
     clean_snippet = str(inhalt_snippet).replace(';', '').replace('\n', ' ').strip()
@@ -106,14 +109,10 @@ st.sidebar.subheader("📚 Letzte Beiträge")
 
 if os.path.isfile(HISTORY_FILE):
     try:
-        # dtype=str verhindert NaN Fehler bei Zahlen
         df = pd.read_csv(HISTORY_FILE, sep=";", names=["Datum", "Titel", "Snippet"], dtype=str).fillna("")
-        
-        # Zeige die letzten 5 Einträge (neueste zuerst)
         for i, row in df.tail(5).iloc[::-1].iterrows():
             display_title = row['Titel']
-            if len(display_title) < 2: display_title = "Eintrag ohne Titel"
-            
+            if len(display_title) < 2: display_title = "Eintrag"
             with st.sidebar.expander(f"{display_title}"):
                 st.caption(f"📅 {row['Datum']}")
                 st.write(row['Snippet'])
@@ -166,21 +165,33 @@ def clean_text(text):
 # --- PROMPT LOGIK ---
 base_rules = """
 ROLLE: Fachjournalist:in des packaging journal.
-ZIELGRUPPE: Entscheider, Ingenieure, Planer.
-TON: Journalistisch, sachlich, präzise, branchennah. KEINE Werbung, KEIN PR-Sprech.
+TON: Journalistisch, sachlich, präzise, branchennah.
 STILREGELN (STRICT):
-- Kein PR-Fluff: Streiche unbelegte Superlative.
-- Firmennamen normal schreiben (keine Versalien).
-- Rechtsformen (GmbH/AG) entfernen.
-- Keine Marken-Symbole (R/TM).
-- Keine Sätze wie 'Besuchen Sie uns' oder 'Wir freuen uns'.
-- KEIN 'Über Firma XY'-Block am Ende.
-- KEIN Datum und KEINE Ortsmarke am Anfang.
-- Einstiege VARIIEREN (Use Case, Trend, Engpass...). Nicht immer 'Firma XY präsentiert'.
+- Kein PR-Fluff.
+- Firmennamen normal schreiben.
 - FORMATIERUNG: Antworte als REINER TEXT. KEINE Markdown-Zeichen wie #, ##, ### oder ** verwenden!
 """
 
-if modus == "Messe-Vorbericht (Special)":
+# 1. LINKEDIN POST ENGLISH
+if modus == "LinkedIn Post (English)":
+    system_prompt = """
+    ROLE: Social Media Manager for 'packaging journal'.
+    TASK: Write a LinkedIn post in ENGLISH based on the provided content.
+    STYLE: Short, clear, professional but engaging. Use Emojis (📦, 🌍, 💡, etc.).
+    STRUCTURE:
+    1. Hook: One punchy sentence to grab attention.
+    2. Key Points: 2-3 bullet points summarizing the most important facts (keep it brief).
+    3. Call to Action: "Read more here:" followed by the Link provided in input.
+    4. Hashtags: Always use #packaging plus 3-4 specific tags.
+    
+    IMPORTANT: 
+    - Output ONLY the post text. 
+    - Do NOT use markdown bolding (**).
+    - If a specific company is mentioned, mention them (but without @ tagging, just text).
+    """
+
+# 2. MESSE VORBERICHT
+elif modus == "Messe-Vorbericht (Special)":
     l_opt = st.radio("PRINT-Länge (gilt nur für Print-Version):", ["KURZ (ca. 900 Zeichen)", "NORMAL (ca. 1300 Zeichen)", "LANG (ca. 2000 Zeichen)"], horizontal=True)
     
     target_print_len = "900"
@@ -197,7 +208,7 @@ if modus == "Messe-Vorbericht (Special)":
     - Oberzeile: [Firma]
     - Headline: [Max 6 Wörter, prägnant]
     - Text: SOFORTIGER EINSTIEG ins Thema. KEIN Anleser.
-    - Footer: Firmen-Website (Recherchieren oder aus Text. Falls unbekannt '???') | Halle/Stand (nur wenn bekannt, sonst 'Halle ??, Stand ??').
+    - Footer: Firmen-Website (Recherchieren oder aus Text) | Halle/Stand (nur wenn bekannt, sonst 'Halle ??, Stand ??').
     
     --- TEIL 2: ONLINE-VERSION ---
     VORGABE: Standardlänge 2500-5000 Zeichen.
@@ -213,6 +224,7 @@ if modus == "Messe-Vorbericht (Special)":
     [O_HEADLINE]...[O_ANLESER]...[O_TEXT]...[O_STAND]...[O_KEYWORD]...[O_DESC]...[O_TAGS]
     """
 
+# 3. STANDARD ONLINE NEWS
 else:
     l_opt = st.radio("Länge:", [
         "KURZ (2.000–4.000 Zeichen)", 
@@ -228,13 +240,7 @@ else:
     {base_rules}
     AUFGABE: Erstelle eine Fach-News für Online.
     LÄNGE: {len_instruction}.
-    
-    STRUKTUR:
-    1. Titel: Max 6 Wörter, sachlich, kein Clickbait.
-    2. Anleser: Max 300 Zeichen, neutral.
-    3. Haupttext: Fließtext, journalistisch, keine PR. Zwischenüberschriften als normale Textzeile schreiben.
-    4. SEO: Snippet (max 160 Zeichen), Fokus-Keyword.
-    
+    STRUKTUR: Titel (max 6 Worte), Anleser (max 300 Zeichen), Haupttext, Snippet (SEO).
     FORMAT-AUSGABE (Nutze exakt diese Trenner):
     [TITEL]...[ANLESER]...[TEXT]...[SNIPPET]...[KEYWORD]
     """
@@ -246,11 +252,10 @@ url_in = st.text_input("Link (URL):", key=f"url_{current_key}")
 file_in = st.file_uploader("Datei:", type=["pdf", "docx", "txt"], key=f"file_{current_key}")
 text_in = st.text_area("Oder Text einfügen:", height=150, key=f"text_{current_key}")
 
-# NEUES FELD FÜR SONDERWÜNSCHE
+# INDIVIDUELLER FOKUS
 custom_focus = st.text_area("🔧 Individueller Fokus / Anweisung (optional):", 
-                            placeholder="z.B. Fokus auf Nachhaltigkeit; Zielgruppe Startups; Lockerer Tonfall...", 
-                            height=80, 
-                            key=f"focus_{current_key}")
+                            placeholder="z.B. 'Fokus auf Nachhaltigkeit', 'Zielgruppe Startups', 'Lockerer Ton'...", 
+                            height=80, key=f"focus_{current_key}")
 
 final_text = ""
 if url_in:
@@ -270,21 +275,26 @@ if st.button("✨ INHALTE GENERIEREN", type="primary"):
     if len(final_text) < 20:
         st.warning("Bitte Material bereitstellen.")
     else:
-        with st.spinner("KI arbeitet nach Masterprompt..."):
+        with st.spinner("KI arbeitet..."):
             model_name = get_best_google_model()
             if model_name:
                 model = genai.GenerativeModel(model_name)
                 
-                # ZUSAMMENBAU DES PROMPTS MIT SONDERWUNSCH
+                # Prompt zusammenbauen
                 full_input = f"{system_prompt}"
                 if custom_focus:
-                    full_input += f"\n\nZUSÄTZLICHE ANWEISUNG FÜR DIESEN TEXT (PRIORITÄT):\n{custom_focus}"
+                    full_input += f"\n\nZUSATZ-ANWEISUNG: {custom_focus}"
+                
+                # URL explizit übergeben für LinkedIn
+                if modus == "LinkedIn Post (English)" and url_in:
+                    full_input += f"\n\nLINK TO ARTICLE: {url_in}"
                 
                 full_input += f"\n\nQUELLMATERIAL:\n{final_text}"
                 
                 response = model.generate_content(full_input)
                 st.session_state['res'] = response.text
                 
+                # Bild generieren (Option prüfen)
                 if generate_img_flag:
                     st.session_state['img'] = generate_horizontal_image(final_text[:200])
                 else:
@@ -294,9 +304,25 @@ if st.button("✨ INHALTE GENERIEREN", type="primary"):
 if 'res' in st.session_state:
     res = st.session_state['res']
     
-    if modus == "Messe-Vorbericht (Special)":
+    # 1. LINKEDIN POST
+    if modus == "LinkedIn Post (English)":
+        st.subheader("LinkedIn Post (English)")
+        
+        # Einfache Anzeige
+        st.code(res, language=None)
+        
+        # Button zum Kopieren in Clipboard-Simulation
+        st.caption("Einfach oben rechts im Kasten auf das Copy-Icon klicken.")
+        
+        save_to_history("LinkedIn Post", res[:50] + "...")
+        
+        if st.session_state.get('img'):
+            st.image(st.session_state['img'], caption="Optionales Visual", width=600)
+
+    # 2. MESSE VORBERICHT
+    elif modus == "Messe-Vorbericht (Special)":
         try:
-            # Parsing Print
+            # Print
             if '[P_OBERZEILE]' in res:
                 p_ober = clean_text(res.split('[P_OBERZEILE]')[1].split('[P_HEADLINE]')[0])
                 p_head = clean_text(res.split('[P_HEADLINE]')[1].split('[P_TEXT]')[0])
@@ -308,7 +334,7 @@ if 'res' in st.session_state:
             else:
                 p_ober, p_head, p_text, p_web, p_stand = "???", "Fehler", res, "???", "???"
 
-            # Parsing Online
+            # Online
             if '[O_HEADLINE]' in res:
                 part_online = res.split('[O_HEADLINE]')[1]
                 o_head = clean_text(part_online.split('[O_ANLESER]')[0])
@@ -327,9 +353,9 @@ if 'res' in st.session_state:
                 full_print_doc = f"{p_ober}\n\n{p_head}\n\n{p_text}\n\n{p_web}\n{p_stand}"
                 st.subheader("Vorschau Print")
                 st.text(full_print_doc)
-                st.subheader("Kopieren & Export")
+                st.subheader("Kopieren")
                 st.code(full_print_doc, language=None)
-                st.download_button("📄 Word-Export (Nur Print)", data=create_docx(full_print_doc), file_name="PJ_Print_Beitrag.docx")
+                st.download_button("📄 Word-Export (Print)", data=create_docx(full_print_doc), file_name="PJ_Print_Beitrag.docx")
 
             with tab_o:
                 if st.session_state.get('img'):
@@ -359,8 +385,8 @@ if 'res' in st.session_state:
             st.error("Fehler beim Verarbeiten.")
             st.write(res)
 
+    # 3. STANDARD NEWS
     else:
-        # Standard News
         try:
             if '[TITEL]' in res:
                 tit = clean_text(res.split('[TITEL]')[1].split('[ANLESER]')[0])
