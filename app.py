@@ -246,6 +246,12 @@ url_in = st.text_input("Link (URL):", key=f"url_{current_key}")
 file_in = st.file_uploader("Datei:", type=["pdf", "docx", "txt"], key=f"file_{current_key}")
 text_in = st.text_area("Oder Text einfügen:", height=150, key=f"text_{current_key}")
 
+# NEUES FELD FÜR SONDERWÜNSCHE
+custom_focus = st.text_area("🔧 Individueller Fokus / Anweisung (optional):", 
+                            placeholder="z.B. Fokus auf Nachhaltigkeit; Zielgruppe Startups; Lockerer Tonfall...", 
+                            height=80, 
+                            key=f"focus_{current_key}")
+
 final_text = ""
 if url_in:
     try:
@@ -268,7 +274,14 @@ if st.button("✨ INHALTE GENERIEREN", type="primary"):
             model_name = get_best_google_model()
             if model_name:
                 model = genai.GenerativeModel(model_name)
-                full_input = f"{system_prompt}\n\nQUELLMATERIAL:\n{final_text}"
+                
+                # ZUSAMMENBAU DES PROMPTS MIT SONDERWUNSCH
+                full_input = f"{system_prompt}"
+                if custom_focus:
+                    full_input += f"\n\nZUSÄTZLICHE ANWEISUNG FÜR DIESEN TEXT (PRIORITÄT):\n{custom_focus}"
+                
+                full_input += f"\n\nQUELLMATERIAL:\n{final_text}"
+                
                 response = model.generate_content(full_input)
                 st.session_state['res'] = response.text
                 
@@ -291,7 +304,6 @@ if 'res' in st.session_state:
                 p_web  = clean_text(res.split('[P_WEB]')[1].split('[P_STAND]')[0])
                 p_stand= clean_text(res.split('[P_STAND]')[1].split('[O_HEADLINE]')[0])
                 
-                # Speichern (Firma: Headline)
                 save_to_history(f"{p_ober}: {p_head}", p_text[:50]+"...")
             else:
                 p_ober, p_head, p_text, p_web, p_stand = "???", "Fehler", res, "???", "???"
