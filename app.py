@@ -55,12 +55,22 @@ if pw_input != st.secrets.get("TOOL_PASSWORD", "pj-redaktion-2026"):
     st.sidebar.warning("Bitte Passwort eingeben.")
     st.stop()
 
-# --- SIDEBAR: ARCHIV ---
+# --- SIDEBAR: BUTTONS & MODUS ---
+st.sidebar.markdown("---")
+st.sidebar.button("🗑️ ALLES LÖSCHEN / NEU", on_click=reset_app, type="secondary")
+st.sidebar.markdown("---")
+
+modus = st.sidebar.radio("Erstellungs-Modus:", ["Standard Online-News", "Messe-Vorbericht (Special)"])
+generate_img_flag = st.sidebar.checkbox("KI-Beitragsbild generieren?", value=True)
+
+# --- SIDEBAR: ARCHIV (JETZT UNTEN) ---
 HISTORY_FILE = "news_history.csv"
 
 def save_to_history(titel, inhalt_snippet):
     datum = datetime.now().strftime("%d.%m. %H:%M")
-    new_entry = pd.DataFrame([{"Datum": datum, "Titel": titel, "Snippet": inhalt_snippet}])
+    # Titel bereinigen, falls er noch Markdown enthält
+    clean_titel = titel.replace('*', '').replace('#', '').strip()
+    new_entry = pd.DataFrame([{"Datum": datum, "Titel": clean_titel, "Snippet": inhalt_snippet}])
     
     if not os.path.isfile(HISTORY_FILE):
         new_entry.to_csv(HISTORY_FILE, index=False, sep=";")
@@ -74,19 +84,12 @@ if os.path.isfile(HISTORY_FILE):
         df = pd.read_csv(HISTORY_FILE, sep=";", names=["Datum", "Titel", "Snippet"])
         # Zeige die letzten 5 Einträge (neueste zuerst)
         for i, row in df.tail(5).iloc[::-1].iterrows():
-            with st.sidebar.expander(f"{row['Datum']}: {str(row['Titel'])[:20]}..."):
-                st.caption(f"**{row['Titel']}**")
+            # Nur Headline im Expander-Titel
+            with st.sidebar.expander(f"{row['Titel']}"):
+                st.caption(f"📅 {row['Datum']}")
                 st.write(row['Snippet'])
     except:
-        st.sidebar.caption("Archiv leer oder nicht lesbar.")
-
-st.sidebar.markdown("---")
-st.sidebar.button("🗑️ ALLES LÖSCHEN / NEU", on_click=reset_app, type="secondary")
-st.sidebar.markdown("---")
-
-# --- MODUS WAHL ---
-modus = st.sidebar.radio("Erstellungs-Modus:", ["Standard Online-News", "Messe-Vorbericht (Special)"])
-generate_img_flag = st.sidebar.checkbox("KI-Beitragsbild generieren?", value=True)
+        st.sidebar.caption("Archiv leer.")
 
 # --- HILFSFUNKTIONEN ---
 def get_best_google_model():
@@ -203,8 +206,7 @@ else:
     [TITEL]...[ANLESER]...[TEXT]...[SNIPPET]...[KEYWORD]
     """
 
-# --- INPUTS (MIT DYNAMISCHEN KEYS ZUM RESETTEN) ---
-# Wir nutzen den input_key aus dem SessionState, der beim Reset hochgezählt wird.
+# --- INPUTS ---
 current_key = st.session_state['input_key']
 
 url_in = st.text_input("Link (URL):", key=f"url_{current_key}")
@@ -237,21 +239,18 @@ if st.button("✨ INHALTE GENERIEREN", type="primary"):
                 response = model.generate_content(full_input)
                 st.session_state['res'] = response.text
                 
-                # Bild optional generieren
                 if generate_img_flag:
                     st.session_state['img'] = generate_horizontal_image(final_text[:200])
                 else:
                     st.session_state['img'] = None
 
-# --- AUSGABE & PARSING ---
+# --- AUSGABE ---
 if 'res' in st.session_state:
     res = st.session_state['res']
     
-    # 1. MESSE VORBERICHT
     if modus == "Messe-Vorbericht (Special)":
-        # Versuch des Parsings
         try:
-            # Print
+            # Parsing Print
             if '[P_OBERZEILE]' in res:
                 p_ober = clean_text(res.split('[P_OBERZEILE]')[1].split('[P_HEADLINE]')[0])
                 p_head = clean_text(res.split('[P_HEADLINE]')[1].split('[P_TEXT]')[0])
@@ -259,12 +258,11 @@ if 'res' in st.session_state:
                 p_web  = clean_text(res.split('[P_WEB]')[1].split('[P_STAND]')[0])
                 p_stand= clean_text(res.split('[P_STAND]')[1].split('[O_HEADLINE]')[0])
                 
-                # Archivieren (Titel + kurzer Ausschnitt)
-                save_to_history(f"Print: {p_head}", p_text[:80] + "...")
+                save_to_history(f"Print: {p_head}", p_text[:50]+"...")
             else:
-                p_ober, p_head, p_text, p_web, p_stand = "???", "Fehler im Format", res, "???", "???"
+                p_ober, p_head, p_text, p_web, p_stand = "???", "Fehler", res, "???", "???"
 
-            # Online
+            # Parsing Online
             if '[O_HEADLINE]' in res:
                 part_online = res.split('[O_HEADLINE]')[1]
                 o_head = clean_text(part_online.split('[O_ANLESER]')[0])
@@ -277,7 +275,6 @@ if 'res' in st.session_state:
             else:
                 o_head, o_anle, o_text = "Fehler", "Fehler", res
 
-            # ANZEIGE
             tab_p, tab_o = st.tabs(["📟 PRINT VERSION", "🌐 ONLINE VERSION"])
             
             with tab_p:
@@ -305,7 +302,7 @@ if 'res' in st.session_state:
                     st.code(o_stand, language=None)
                 with c2:
                     st.markdown("### 🔍 SEO")
-                    st.caption("Fokus Keyword")
+                    st.caption("Keyword")
                     st.code(o_key, language=None)
                     st.caption("Description")
                     st.code(o_desc, language=None)
@@ -313,11 +310,11 @@ if 'res' in st.session_state:
                     st.code(o_tags, language=None)
 
         except Exception as e:
-            st.error("Fehler beim Verarbeiten der KI-Antwort. Bitte nochmal generieren.")
+            st.error("Fehler beim Verarbeiten.")
             st.write(res)
 
-    # 2. STANDARD ONLINE NEWS
     else:
+        # Standard News
         try:
             if '[TITEL]' in res:
                 tit = clean_text(res.split('[TITEL]')[1].split('[ANLESER]')[0])
@@ -326,7 +323,7 @@ if 'res' in st.session_state:
                 sni = clean_text(res.split('[SNIPPET]')[1].split('[KEYWORD]')[0])
                 key = clean_text(res.split('[KEYWORD]')[1])
                 
-                save_to_history(f"News: {tit}", anl[:80] + "...")
+                save_to_history(f"News: {tit}", anl[:50]+"...")
             else:
                 tit, anl, txt, sni, key = "Fehler", "Fehler", res, "Fehler", "Fehler"
             
