@@ -100,4 +100,55 @@ if url_in:
     try:
         r = requests.get(url_in, timeout=10)
         final_text = BeautifulSoup(r.text, 'html.parser').get_text(separator=' ', strip=True)
-    except:
+    except: st.error("Fehler beim Laden der URL")
+elif file_in:
+    if file_in.type == "application/pdf":
+        pdf = PyPDF2.PdfReader(file_in)
+        final_text = " ".join([p.extract_text() for p in pdf.pages])
+    elif file_in.type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+        final_text = docx2txt.process(file_in)
+    else: final_text = file_in.read().decode("utf-8")
+else: final_text = text_in
+
+# --- GENERIERUNG ---
+if st.button(f"✨ {modus.upper()} JETZT GENERIEREN", type="primary"):
+    if len(final_text) < 20:
+        st.warning("Bitte Material bereitstellen.")
+    else:
+        with st.spinner("KI verarbeitet Daten..."):
+            model_name = get_best_google_model()
+            if not model_name:
+                st.error("Google API Modell-Fehler.")
+            else:
+                # 1. Google Text
+                model = genai.GenerativeModel(model_name)
+                response = model.generate_content(f"{system_prompt}\n\nBasis-Text: {final_text}")
+                st.session_state['last_result'] = response.text
+                
+                # 2. OpenAI Bild (nur wenn gewünscht)
+                if generate_img_flag:
+                    st.session_state['last_image'] = generate_horizontal_image(final_text[:200])
+                else:
+                    st.session_state['last_image'] = None
+                
+                st.success(f"Inhalt erstellt mit {model_name}")
+
+# --- ANZEIGE & EXPORT ---
+if 'last_result' in st.session_state:
+    st.divider()
+    
+    # Layout-Anpassung: Wenn Bild da, dann Spalten. Sonst volle Breite.
+    if st.session_state.get('last_image'):
+        col_img, col_txt = st.columns([1, 1])
+        with col_img:
+            st.markdown("### 🖼️ Beitragsbild (16:9)")
+            st.image(st.session_state['last_image'], use_container_width=True)
+        with col_txt:
+            st.markdown("### 📝 Generierter Content")
+            st.markdown(st.session_state['last_result'])
+    else:
+        st.markdown("### 📝 Generierter Content")
+        st.markdown(st.session_state['last_result'])
+    
+    st.divider()
+    st.download_button("📄 Word-Download (.docx)", data=create_docx(st.session_state['last_result']), file_name="PJ_Beitrag.docx")
