@@ -24,37 +24,60 @@ st.markdown("""
     }
     .stCode { border: 1px solid #24A27F !important; border-radius: 5px; background-color: #ffffff !important; }
     h3 { color: #24A27F; margin-top: 20px; }
-    div[data-baseweb="tab-list"] button[aria-selected="true"] {
-        background-color: #24A27F !important;
-        color: white !important;
-    }
-    /* Sidebar Optimierung */
     [data-testid="stSidebar"] { border-right: 1px solid #e0e0e0; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- SESSION STATE & RESET LOGIK ---
-if 'input_key' not in st.session_state:
-    st.session_state['input_key'] = 0
+# --- SESSION STATE ---
+if 'input_key' not in st.session_state: st.session_state['input_key'] = 0
 
 def reset_app():
-    """Erhöht den Key-Counter, was alle Inputs neu lädt (und leert)"""
     st.session_state['input_key'] += 1
-    if 'res' in st.session_state: del st.session_state['res']
-    if 'img' in st.session_state: del st.session_state['img']
-    if 'og_img' in st.session_state: del st.session_state['og_img']
+    keys_to_clear = ['res', 'img', 'og_img']
+    for k in keys_to_clear:
+        if k in st.session_state: del st.session_state[k]
+
+# --- HILFSFUNKTIONEN ---
+def get_best_google_model():
+    try:
+        genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
+        return "models/gemini-1.5-flash"
+    except: return None
+
+def generate_horizontal_image(topic):
+    try:
+        client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+        res = client.images.generate(
+            model="dall-e-3", 
+            prompt=f"Industrial photography, packaging industry theme: {topic}. High-end cinematic lighting, 16:9 horizontal, no text.", 
+            size="1792x1024", quality="standard", n=1
+        )
+        return res.data[0].url
+    except: return None
+
+def get_website_og_image(url):
+    try:
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        r = requests.get(url, headers=headers, timeout=5)
+        soup = BeautifulSoup(r.content, 'html.parser')
+        og = soup.find("meta", property="og:image")
+        return og["content"] if og else None
+    except: return None
+
+def create_docx(txt):
+    d = Document(); [d.add_paragraph(l) for l in txt.split('\n') if l.strip()]
+    b = BytesIO(); d.save(b); return b.getvalue()
+
+def clean_text(t):
+    if not t: return ""
+    return str(t).replace('**','').replace('__','').replace('### ','').replace('## ','').strip()
 
 # --- HEADER ---
 col_logo, col_title = st.columns([1, 5])
-with col_logo:
-    st.markdown("<h1 style='color: #24A27F; margin:0;'>pj</h1>", unsafe_allow_html=True)
-with col_title:
-    st.markdown("<h1 style='margin:0;'>Redaktions Tool</h1>", unsafe_allow_html=True)
+with col_logo: st.markdown("<h1 style='color: #24A27F; margin:0;'>pj</h1>", unsafe_allow_html=True)
+with col_title: st.markdown("<h1 style='margin:0;'>Redaktions Tool</h1>", unsafe_allow_html=True)
 
-# ==========================================
-# SIDEBAR STRUKTUR
-# ==========================================
-
+# ================= SIDEBAR =================
 st.sidebar.header("🔐 Login")
 pw_input = st.sidebar.text_input("Passwort:", type="password")
 if pw_input != st.secrets.get("TOOL_PASSWORD", "pj-redaktion-2026"):
@@ -63,392 +86,246 @@ if pw_input != st.secrets.get("TOOL_PASSWORD", "pj-redaktion-2026"):
 
 st.sidebar.markdown("---")
 
-# 1. ERSTELLUNGS-MODUS
+# MODUS WAHL
 modus = st.sidebar.radio("Erstellungs-Modus:", [
     "Standard Online-News", 
-    "Messe-Vorbericht (Special)",
-    "LinkedIn Post (English)",
+    "Messe-Vorbericht (Special)", 
+    "LinkedIn Post (English)", 
     "Social Media (Deutsch)"
 ])
 
-# 2. MESSE AUSWAHL (Nur aktiv bei Messe)
+# MESSE OPTIONS
 selected_messe = ""
 m_link = ""
 if modus == "Messe-Vorbericht (Special)":
-    selected_messe = st.sidebar.selectbox("Welche Messe?", ["LogiMat", "interpack", "Fachpack", "SPS"])
+    selected_messe = st.sidebar.selectbox("Messe:", ["LogiMat", "interpack", "Fachpack", "SPS"])
     m_links = {
-        "LogiMat": "https://www.logimat-messe.de/de/die-messe/ausstellerliste",
-        "interpack": "https://www.interpack.de/de/Aussteller_Produkte/Ausstellerverzeichnis",
-        "Fachpack": "https://www.fachpack.de/de/aussteller-produkte/ausstellerliste",
+        "LogiMat": "https://www.logimat-messe.de/de/die-messe/ausstellerliste", 
+        "interpack": "https://www.interpack.de/de/Aussteller_Produkte/Ausstellerverzeichnis", 
+        "Fachpack": "https://www.fachpack.de/de/aussteller-produkte/ausstellerliste", 
         "SPS": "https://sps.mesago.com/nuernberg/de/ausstellersuche.html"
     }
     m_link = m_links.get(selected_messe, "")
 
 st.sidebar.markdown("---")
 
-# 3. OPTIONEN & RESET
-# Bild-Option ausblenden bei Social Media, da wir das Web-Bild nehmen
+# OPTIONEN
 generate_img_flag = True
-if "Social Media" in modus or "LinkedIn" in modus:
+if "Social" in modus or "LinkedIn" in modus:
     generate_img_flag = False
 else:
     generate_img_flag = st.sidebar.checkbox("KI-Beitragsbild generieren?", value=True)
 
-st.sidebar.button("🗑️ ALLES LÖSCHEN / NEU", on_click=reset_app, type="secondary")
+st.sidebar.button("🗑️ ALLES NEU / RESET", on_click=reset_app, type="secondary")
 
-# 4. ARCHIV (GANZ UNTEN)
+# ARCHIV
 HISTORY_FILE = "news_history.csv"
-
-def save_to_history(titel, inhalt_snippet):
-    datum = datetime.now().strftime("%d.%m. %H:%M")
-    if not titel or str(titel).lower() == 'nan': titel = "Unbekannter Titel"
-    clean_titel = str(titel).replace(';', '').replace('\n', ' ').strip()
-    clean_snippet = str(inhalt_snippet).replace(';', '').replace('\n', ' ').strip()
-    
-    new_entry = pd.DataFrame([{"Datum": datum, "Titel": clean_titel, "Snippet": clean_snippet}])
-    
-    if not os.path.isfile(HISTORY_FILE):
-        new_entry.to_csv(HISTORY_FILE, index=False, sep=";")
-    else:
-        new_entry.to_csv(HISTORY_FILE, mode='a', header=False, index=False, sep=";")
+def save_to_history(titel, snippet):
+    d = datetime.now().strftime("%d.%m. %H:%M")
+    t = str(titel).replace(';', '').strip() if titel else "Unbekannt"
+    s = str(snippet).replace(';', '').strip()
+    entry = pd.DataFrame([{"Datum": d, "Titel": t, "Snippet": s}])
+    if not os.path.isfile(HISTORY_FILE): entry.to_csv(HISTORY_FILE, index=False, sep=";")
+    else: entry.to_csv(HISTORY_FILE, mode='a', header=False, index=False, sep=";")
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("📚 Letzte Beiträge")
-
 if os.path.isfile(HISTORY_FILE):
-    try:
-        df = pd.read_csv(HISTORY_FILE, sep=";", names=["Datum", "Titel", "Snippet"], dtype=str).fillna("")
-        for i, row in df.tail(5).iloc[::-1].iterrows():
-            display_title = row['Titel']
-            if len(display_title) < 2: display_title = "Eintrag"
-            with st.sidebar.expander(f"{display_title}"):
-                st.caption(f"📅 {row['Datum']}")
-                st.write(row['Snippet'])
-    except Exception as e:
-        st.sidebar.caption("Archiv wird neu aufgebaut...")
-else:
-    st.sidebar.caption("Noch keine Einträge.")
+    with st.sidebar.expander("📚 Verlauf"):
+        try:
+            df = pd.read_csv(HISTORY_FILE, sep=";", names=["Datum","Titel","Snippet"], dtype=str).fillna("")
+            for i, r in df.tail(5).iloc[::-1].iterrows():
+                st.caption(f"{r['Datum']}: {r['Titel']}")
+        except: pass
 
-
-# ==========================================
-# MAIN APP LOGIK
-# ==========================================
-
-# --- HILFSFUNKTIONEN ---
-def get_best_google_model():
-    try:
-        genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-        models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        for preferred in ["models/gemini-1.5-flash", "models/gemini-1.5-pro"]:
-            if preferred in models: return preferred
-        return models[0] if models else None
-    except: return None
-
-def generate_horizontal_image(topic):
-    try:
-        client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
-        response = client.images.generate(
-            model="dall-e-3",
-            prompt=f"Professional industrial photography for packaging industry, theme: {topic}. High-end cinematic lighting, 16:9 horizontal, photorealistic, no text.",
-            size="1792x1024", quality="standard", n=1
-        )
-        return response.data[0].url
-    except: return None
-
-def get_website_og_image(url):
-    """Holt das Open Graph Bild von einer URL"""
-    try:
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
-        response = requests.get(url, headers=headers, timeout=5)
-        soup = BeautifulSoup(response.content, 'html.parser')
-        og_image = soup.find("meta", property="og:image")
-        if og_image:
-            return og_image["content"]
-        else:
-            return None
-    except:
-        return None
-
-def create_docx(text_content):
-    doc = Document()
-    for line in text_content.split('\n'):
-        if line.strip(): doc.add_paragraph(line)
-    bio = BytesIO()
-    doc.save(bio)
-    return bio.getvalue()
-
-def clean_text(text):
-    if not text: return ""
-    text = str(text).replace('**', '').replace('__', '')
-    text = text.replace('### ', '').replace('## ', '').replace('# ', '')
-    return text.strip()
+# ================= MAIN AREA =================
 
 # --- PROMPT LOGIK ---
-base_rules = """
-ROLLE: Fachjournalist:in des packaging journal.
-TON: Journalistisch, sachlich, präzise, branchennah.
-STILREGELN (STRICT):
-- Kein PR-Fluff.
-- Firmennamen normal schreiben.
-- FORMATIERUNG: Antworte als REINER TEXT. KEINE Markdown-Zeichen wie #, ##, ### oder ** verwenden!
+
+# Aggressive Regeln für neutrale Distanz
+anti_pr_rules = """
+STRIKTE REGELN FÜR NEUTRALITÄT (Verstoß = Fehler):
+1. PERSPEKTIVE: Schreibe ausschließlich in der 3. Person ("Das Unternehmen", "Die Maschine"). 
+2. VERBOTENE WÖRTER (Direkte Ansprache): "Sie", "Ihre", "Ihr", "Du", "Wir", "Uns". Diese Wörter dürfen im Text NICHT vorkommen.
+3. VERBOTENE IMPERATIVE (Aufforderungen): "Besuchen Sie", "Kommen Sie", "Schauen Sie", "Erleben Sie", "Überzeugen Sie sich", "Entdecken Sie".
+4. ERSATZ-REGEL: Wenn im Quelltext steht "Besuchen Sie uns in Halle 3", schreibe stattdessen "Das Exponat befindet sich in Halle 3" oder "Der Aussteller ist in Halle 3 zu finden".
+5. KEINE WERTUNG: Entferne Wörter wie "stolz", "leidenschaftlich", "einzigartig", "wir freuen uns".
+6. START-VERBOT: Beginne NIEMALS mit dem Messenamen oder "Auf der Messe XY zeigt...".
 """
 
-# 1. LINKEDIN POST ENGLISH
+base_rules = f"""
+ROLLE: Fachjournalist für das 'packaging journal'. 
+TON: Nüchtern, faktisch, technisch, distanziert.
+FORMAT: REINER TEXT, KEIN MARKDOWN.
+{anti_pr_rules}
+"""
+
 if modus == "LinkedIn Post (English)":
     system_prompt = """
-    ROLE: Social Media Manager for 'packaging journal'.
-    TASK: Write a LinkedIn post in ENGLISH based on the provided content/URL.
-    STYLE: Short, clear, professional but engaging. Use Emojis (📦, 🌍, 💡, etc.).
-    STRUCTURE:
-    1. Hook: One punchy sentence to grab attention.
-    2. Key Points: 2-3 bullet points summarizing the most important facts (keep it brief).
-    3. Call to Action: Use an arrow ➡️ or link 🔗 emoji followed immediately by the URL. Do NOT write "Read more".
-    4. Hashtags: Always use #packaging plus 3-4 specific tags.
-    
-    IMPORTANT: 
-    - Output ONLY the post text. 
-    - Do NOT use markdown bolding (**).
-    - If a specific company is mentioned, mention them (but without @ tagging, just text).
+    ROLE: Social Media Manager 'packaging journal'. TASK: LinkedIn post in ENGLISH.
+    STYLE: Short, engaging, Emojis. STRUCTURE: Hook, 2-3 Key Points, Call to Action (Arrow ➡️ or 🔗 + URL directly, NO 'read more'), Hashtags (#packaging + 3).
+    OUTPUT ONLY POST TEXT. NO MARKDOWN.
     """
-
-# 2. SOCIAL MEDIA DEUTSCH
 elif modus == "Social Media (Deutsch)":
     system_prompt = """
-    ROLLE: Social Media Manager für das 'packaging journal'.
-    AUFGABE: Erstelle Posts für deutsche Kanäle basierend auf Input/URL.
-    STIL: Professionell, branchennah, Emojis nutzen (📦, 🏗️, ♻️).
-    
-    OUTPUT 1: LinkedIn Post (Deutsch)
-    - Hook: Ein starker Satz zum Einstieg.
-    - Key Points: 2-3 Bullet Points mit den wichtigsten Fakten.
-    - Call to Action: Nutze Pfeil ➡️ oder Link 🔗 Emoji gefolgt direkt von der URL (kein "Mehr lesen" Text).
-    - Hashtags: #packaging plus 3-4 passende deutsche oder englische Fach-Tags.
-    
-    OUTPUT 2: X / Twitter Post (Deutsch)
-    - Maximal 270 Zeichen (inklusive Link und Hashtags).
-    - Kurz, knackig, Newswert.
-    - URL einfügen.
-    
-    FORMAT-AUSGABE (Nutze exakt diese Trenner):
-    [LINKEDIN]...[TWITTER]
-    
-    WICHTIG:
-    - KEINE Markdown-Formatierung (**).
-    - Firmennamen normal schreiben.
+    ROLLE: Social Media Manager.
+    OUTPUT 1: LinkedIn Post (Deutsch). Hook, Bulletpoints, CTA (➡️ oder 🔗 + URL direkt, KEIN 'Mehr lesen'), Hashtags.
+    OUTPUT 2: X/Twitter Post (Deutsch). Max 270 Zeichen inkl. Link.
+    FORMAT: [LINKEDIN]...[TWITTER] NO MARKDOWN.
     """
-
-# 3. MESSE VORBERICHT
 elif modus == "Messe-Vorbericht (Special)":
-    l_opt = st.radio("PRINT-Länge (gilt nur für Print-Version):", ["KURZ (ca. 900 Zeichen)", "NORMAL (ca. 1300 Zeichen)", "LANG (ca. 2000 Zeichen)"], horizontal=True)
+    len_map = {"KURZ": "900", "NORMAL": "1300", "LANG": "2000"}
+    l_opt = st.radio("PRINT-Länge:", ["KURZ (900)", "NORMAL (1300)", "LANG (2000)"], horizontal=True)
+    target = len_map.get(l_opt.split()[0], "900")
     
-    target_print_len = "900"
-    if "1300" in l_opt: target_print_len = "1300"
-    if "2000" in l_opt: target_print_len = "2000"
-
+    # Anweisung für Varianz ohne PR-Sprech
+    einstiegs_anweisung = """
+    WICHTIG - EINSTIEGS-VARIANZ (Wähle einen der Typen, vermeide "Firma zeigt..."):
+    Typ A (Problem-Fokus): "Steigende Energiekosten erfordern effizientere Antriebe. Genau hier setzt die neue Lösung an..."
+    Typ B (Technik-Fokus): "Mit einer Taktleistung von 200 Zyklen pro Minute erreicht die neue Anlage..."
+    Typ C (Trend-Fokus): "Nachhaltigkeit dominiert die Verpackungsbranche. Rezyklate stehen dabei im Mittelpunkt..."
+    
+    Wähle passend zum Inhalt Typ A, B oder C. Starte NICHT mit dem Firmennamen.
+    """
+    
     system_prompt = f"""
     {base_rules}
-    AUFGABE: Erstelle zwei Versionen für ein {selected_messe}-Special.
+    TASK: Schreibe zwei Versionen für ein {selected_messe}-Special.
+    {einstiegs_anweisung}
     
-    --- TEIL 1: PRINT-VERSION ---
-    VORGABE: Exakt ca. {target_print_len} Zeichen.
-    STRUKTUR:
-    - Oberzeile: [Firma]
-    - Headline: [Max 6 Wörter, prägnant]
-    - Text: SOFORTIGER EINSTIEG ins Thema. KEIN Anleser.
-    - Footer: Firmen-Website (Recherchieren oder aus Text) | Halle/Stand (nur wenn bekannt, sonst 'Halle ??, Stand ??').
+    TEIL 1: PRINT-VERSION
+    - Länge: Exakt ca. {target} Zeichen.
+    - Struktur: Oberzeile, Headline, Text (SOFORTIGER journalistischer EINSTIEG, kein Anleser).
+    - Footer: Nur 'www.firma.de' | Halle/Stand.
     
-    --- TEIL 2: ONLINE-VERSION ---
-    VORGABE: Standardlänge 2500-5000 Zeichen.
-    STRUKTUR:
-    - Headline: [Max 6 Wörter]
-    - Anleser: [Max 300 Zeichen, 2-3 Sätze]
-    - Text: [Mit Zwischenüberschriften als normale Zeile ohne #, journalistisch tiefgehend]
-    - Footer: Halle/Stand.
-    - SEO: Fokus-Keyword, Meta Description (max 160), Tags.
-
-    FORMAT-AUSGABE (Nutze exakt diese Trenner):
+    TEIL 2: ONLINE-VERSION
+    - Länge: 2500-5000 Zeichen.
+    - Struktur: Headline, Anleser (max 300Z), Text mit Zwischenüberschriften, Footer.
+    
+    FORMAT-AUSGABE: 
     [P_OBERZEILE]...[P_HEADLINE]...[P_TEXT]...[P_WEB]...[P_STAND]
     [O_HEADLINE]...[O_ANLESER]...[O_TEXT]...[O_STAND]...[O_KEYWORD]...[O_DESC]...[O_TAGS]
     """
-
-# 4. STANDARD ONLINE NEWS
 else:
-    l_opt = st.radio("Länge:", [
-        "KURZ (2.000–4.000 Zeichen)", 
-        "NORMAL (6.000–9.000 Zeichen)", 
-        "LANG (12.000–15.000 Zeichen)"
-    ], horizontal=True)
-    
-    len_instruction = "2000-4000 Zeichen"
-    if "NORMAL" in l_opt: len_instruction = "6000-9000 Zeichen, nutze Zwischenüberschriften (ohne #)"
-    if "LANG" in l_opt: len_instruction = "12000-15000 Zeichen, nutze Zwischenüberschriften (ohne #)"
-
+    l_opt = st.radio("Länge:", ["KURZ (2-4k)", "NORMAL (6-9k)", "LANG (12-15k)"], horizontal=True)
     system_prompt = f"""
-    {base_rules}
-    AUFGABE: Erstelle eine Fach-News für Online.
-    LÄNGE: {len_instruction}.
-    STRUKTUR: Titel (max 6 Worte), Anleser (max 300 Zeichen), Haupttext, Snippet (SEO).
-    FORMAT-AUSGABE (Nutze exakt diese Trenner):
-    [TITEL]...[ANLESER]...[TEXT]...[SNIPPET]...[KEYWORD]
+    {base_rules} 
+    TASK: Fach-News Online. 
+    EINSTIEG: Journalistisch (Problem/Lösung oder Technik), kein PR-Sprech.
+    FORMAT: [TITEL]...[ANLESER]...[TEXT]...[SNIPPET]...[KEYWORD]
     """
 
-# --- INPUTS ---
-current_key = st.session_state['input_key']
-
-url_in = st.text_input("Link (URL):", key=f"url_{current_key}")
-file_in = st.file_uploader("Datei:", type=["pdf", "docx", "txt"], key=f"file_{current_key}")
-text_in = st.text_area("Oder Text einfügen:", height=150, key=f"text_{current_key}")
-
-custom_focus = st.text_area("🔧 Individueller Fokus / Anweisung (optional):", 
-                            placeholder="z.B. 'Fokus auf Nachhaltigkeit', 'Zielgruppe Startups'...", 
-                            height=80, key=f"focus_{current_key}")
+# INPUTS
+ck = st.session_state['input_key']
+url_in = st.text_input("Link (URL):", key=f"url_{ck}")
+file_in = st.file_uploader("Datei:", key=f"file_{ck}")
+text_in = st.text_area("Text / Notizen:", height=150, key=f"text_{ck}")
+custom_focus = st.text_area("🔧 Individueller Fokus / Anweisung (optional):", height=60, key=f"focus_{ck}")
 
 final_text = ""
 if url_in:
-    try:
-        r = requests.get(url_in, timeout=10)
-        final_text = BeautifulSoup(r.text, 'html.parser').get_text(separator=' ', strip=True)
-    except: st.error("Fehler beim Laden der URL")
+    try: r = requests.get(url_in, timeout=10); final_text = BeautifulSoup(r.text, 'html.parser').get_text(separator=' ', strip=True)
+    except: st.error("URL Fehler")
 elif file_in:
-    if file_in.type == "application/pdf":
-        pdf = PyPDF2.PdfReader(file_in)
-        final_text = " ".join([p.extract_text() for p in pdf.pages])
+    if file_in.type == "application/pdf": p = PyPDF2.PdfReader(file_in); final_text = " ".join([page.extract_text() for page in p.pages])
     else: final_text = docx2txt.process(file_in)
 else: final_text = text_in
 
-# --- GENERIERUNG ---
+# GENERIEREN
 if st.button("✨ INHALTE GENERIEREN", type="primary"):
-    if len(final_text) < 20:
-        st.warning("Bitte Material bereitstellen.")
+    if len(final_text) < 20: st.warning("Bitte Material bereitstellen.")
     else:
         with st.spinner("KI arbeitet..."):
+            is_social = "LinkedIn" in modus or "Social" in modus
             
-            # 1. Bild holen, falls URL und Social Modus
-            is_social = "LinkedIn" in modus or "Social Media" in modus
+            # Bild laden für Social (vom Link)
             if is_social and url_in:
-                og_link = get_website_og_image(url_in)
-                if og_link: st.session_state['og_img'] = og_link
+                og = get_website_og_image(url_in)
+                if og: st.session_state['og_img'] = og
             
-            # 2. Text generieren
-            model_name = get_best_google_model()
-            if model_name:
-                model = genai.GenerativeModel(model_name)
-                
-                full_input = f"{system_prompt}"
-                if custom_focus:
-                    full_input += f"\n\nZUSATZ-ANWEISUNG: {custom_focus}"
-                if is_social and url_in:
-                    full_input += f"\n\nLINK TO ARTICLE: {url_in}"
-                
-                full_input += f"\n\nQUELLMATERIAL:\n{final_text}"
-                
-                response = model.generate_content(full_input)
-                st.session_state['res'] = response.text
-                
-                # Bild generieren (nur wenn NICHT Social Media, dort Web-Bild)
-                if generate_img_flag and not is_social:
-                    st.session_state['img'] = generate_horizontal_image(final_text[:200])
-                else:
-                    st.session_state['img'] = None
+            # Text Generierung
+            mn = get_best_google_model()
+            if mn:
+                mod = genai.GenerativeModel(mn)
+                pmt = f"{system_prompt}\nFOKUS: {custom_focus}\nLINK: {url_in}\nMATERIAL:\n{final_text}"
+                try:
+                    resp = mod.generate_content(pmt)
+                    st.session_state['res'] = resp.text
+                except: st.error("KI-Fehler beim Generieren.")
+            
+            # Bild KI Generierung (nur wenn nicht Social)
+            if generate_img_flag and not is_social:
+                 st.session_state['img'] = generate_horizontal_image(final_text[:200])
 
-# --- AUSGABE & PARSING ---
+# AUSGABE
 if 'res' in st.session_state:
     res = st.session_state['res']
     
     # 1. LINKEDIN ENGLISCH
     if modus == "LinkedIn Post (English)":
-        st.subheader("LinkedIn Post (English)")
-        if 'og_img' in st.session_state:
-            st.image(st.session_state['og_img'], caption=f"Vorschau-Bild von: {url_in}", width=600)
-        
+        st.subheader("LinkedIn (English)")
+        if 'og_img' in st.session_state: st.image(st.session_state['og_img'], caption="Vorschau-Bild der URL", width=500)
         st.code(res, language=None)
-        save_to_history("LinkedIn EN", res[:50] + "...")
+        st.caption("Oben rechts klicken zum Kopieren.")
+        save_to_history("LinkedIn EN", res[:50])
 
-    # 2. SOCIAL MEDIA DEUTSCH (Linked + Twitter)
+    # 2. SOCIAL DEUTSCH
     elif modus == "Social Media (Deutsch)":
         st.subheader("Social Media (Deutsch)")
-        if 'og_img' in st.session_state:
-            st.image(st.session_state['og_img'], caption=f"Vorschau-Bild von: {url_in}", width=600)
-        
+        if 'og_img' in st.session_state: st.image(st.session_state['og_img'], caption="Vorschau-Bild der URL", width=500)
         try:
-            li_post = res.split('[LINKEDIN]')[1].split('[TWITTER]')[0].strip()
-            tw_post = res.split('[TWITTER]')[1].strip()
+            li = res.split('[LINKEDIN]')[1].split('[TWITTER]')[0].strip()
+            tw = res.split('[TWITTER]')[1].strip()
             
             c1, c2 = st.columns(2)
             with c1:
-                st.markdown("### LinkedIn (Deutsch)")
-                st.code(li_post, language=None)
+                st.markdown("**LinkedIn (Lang)**")
+                st.code(li, language=None)
             with c2:
-                st.markdown("### X / Twitter (max 270)")
-                st.code(tw_post, language=None)
-                
-            save_to_history("Social DE", li_post[:50] + "...")
-            
-        except:
-            st.write(res)
+                st.markdown("**X / Twitter (Kurz)**")
+                st.code(tw, language=None)
+            save_to_history("Social DE", li[:50])
+        except: st.write(res)
 
-    # 3. MESSE VORBERICHT
+    # 3. MESSE SPECIAL
     elif modus == "Messe-Vorbericht (Special)":
         try:
-            if '[P_OBERZEILE]' in res:
-                p_ober = clean_text(res.split('[P_OBERZEILE]')[1].split('[P_HEADLINE]')[0])
+            # Parsing mit Fallback, falls die KI mal ein Trennzeichen vergisst
+            p_head = "Unbekannt"
+            if '[P_HEADLINE]' in res:
                 p_head = clean_text(res.split('[P_HEADLINE]')[1].split('[P_TEXT]')[0])
+            
+            # Wenn Parsing klappt:
+            if '[P_OBERZEILE]' in res and '[O_HEADLINE]' in res:
+                p_ober = clean_text(res.split('[P_OBERZEILE]')[1].split('[P_HEADLINE]')[0])
                 p_text = clean_text(res.split('[P_TEXT]')[1].split('[P_WEB]')[0])
                 p_web  = clean_text(res.split('[P_WEB]')[1].split('[P_STAND]')[0])
                 p_stand= clean_text(res.split('[P_STAND]')[1].split('[O_HEADLINE]')[0])
                 
-                save_to_history(f"{p_ober}: {p_head}", p_text[:50]+"...")
-            else:
-                p_ober, p_head, p_text, p_web, p_stand = "???", "Fehler", res, "???", "???"
-
-            if '[O_HEADLINE]' in res:
-                part_online = res.split('[O_HEADLINE]')[1]
-                o_head = clean_text(part_online.split('[O_ANLESER]')[0])
-                o_anle = clean_text(part_online.split('[O_ANLESER]')[1].split('[O_TEXT]')[0])
-                o_text = clean_text(part_online.split('[O_TEXT]')[1].split('[O_STAND]')[0])
-                o_stand= clean_text(part_online.split('[O_STAND]')[1].split('[O_KEYWORD]')[0])
-                o_key  = clean_text(part_online.split('[O_KEYWORD]')[1].split('[O_DESC]')[0])
-                o_desc = clean_text(part_online.split('[O_DESC]')[1].split('[O_TAGS]')[0])
-                o_tags = clean_text(part_online.split('[O_TAGS]')[1])
-            else:
-                o_head, o_anle, o_text = "Fehler", "Fehler", res
-
-            tab_p, tab_o = st.tabs(["📟 PRINT VERSION", "🌐 ONLINE VERSION"])
-            
-            with tab_p:
-                full_print_doc = f"{p_ober}\n\n{p_head}\n\n{p_text}\n\n{p_web}\n{p_stand}"
-                st.subheader("Vorschau Print")
-                st.text(full_print_doc)
-                st.code(full_print_doc, language=None)
-                st.download_button("📄 Word-Export (Print)", data=create_docx(full_print_doc), file_name="PJ_Print_Beitrag.docx")
-
-            with tab_o:
-                if st.session_state.get('img'):
-                    st.image(st.session_state['img'], caption="Beitragsbild (16:9)", width=800)
+                full_print = f"{p_ober}\n\n{p_head}\n\n{p_text}\n\n{p_web}\n{p_stand}"
                 
-                c1, c2 = st.columns(2)
-                with c1:
-                    st.markdown("### 📝 Inhalt")
-                    st.caption("Titel")
-                    st.code(o_head, language=None)
-                    st.caption("Anleser")
-                    st.code(o_anle, language=None)
-                    st.caption("Haupttext")
-                    st.code(o_text, language=None)
-                    st.caption("Standinfo")
-                    st.code(o_stand, language=None)
-                with c2:
-                    st.markdown("### 🔍 SEO")
-                    st.caption("Keyword")
-                    st.code(o_key, language=None)
-                    st.caption("Description")
-                    st.code(o_desc, language=None)
-                    st.caption("Tags")
-                    st.code(o_tags, language=None)
+                # Online
+                o_part = res.split('[O_HEADLINE]')[1]
+                o_head = clean_text(o_part.split('[O_ANLESER]')[0])
+                o_anle = clean_text(o_part.split('[O_ANLESER]')[1].split('[O_TEXT]')[0])
+                o_text = clean_text(o_part.split('[O_TEXT]')[1].split('[O_STAND]')[0])
+                o_stand = clean_text(o_part.split('[O_STAND]')[1].split('[O_KEYWORD]')[0])
+                
+                save_to_history(f"Messe: {p_head}", "Bericht")
 
-        except Exception as e:
-            st.error("Fehler beim Verarbeiten.")
-            st.write(res)
+                t1, t2 = st.tabs(["📟 PRINT", "🌐 ONLINE"])
+                with t1:
+                    st.code(full_print, language=None)
+                    st.download_button("📄 Word (Print)", create_docx(full_print), "Print.docx")
+                with t2:
+                    if st.session_state.get('img'): st.image(st.session_state['img'], width=600)
+                    st.markdown("**Titel:**"); st.code(o_head, language=None)
+                    st.markdown("**Anleser:**"); st.code(o_anle, language=None)
+                    st.markdown("**Text:**"); st.code(o_text, language=None)
+                    st.markdown("**Stand:**"); st.code(o_stand, language=None)
+            else:
+                st.error("Formatierungs-Fehler der KI. Hier ist der Rohtext:")
+                st.write(res)
+        except: st.write(res)
 
     # 4. STANDARD NEWS
     else:
@@ -457,35 +334,9 @@ if 'res' in st.session_state:
                 tit = clean_text(res.split('[TITEL]')[1].split('[ANLESER]')[0])
                 anl = clean_text(res.split('[ANLESER]')[1].split('[TEXT]')[0])
                 txt = clean_text(res.split('[TEXT]')[1].split('[SNIPPET]')[0])
-                sni = clean_text(res.split('[SNIPPET]')[1].split('[KEYWORD]')[0])
-                key = clean_text(res.split('[KEYWORD]')[1])
+                if st.session_state.get('img'): st.image(st.session_state['img'], width=600)
                 
-                save_to_history(f"News: {tit}", anl[:50]+"...")
-            else:
-                tit, anl, txt, sni, key = "Fehler", "Fehler", res, "Fehler", "Fehler"
-            
-            if st.session_state.get('img'):
-                st.image(st.session_state['img'], caption="Beitragsbild (16:9)", width=800)
-            
-            c1, c2 = st.columns([2, 1])
-            with c1:
-                st.subheader("Inhalt")
-                st.caption("Titel")
-                st.code(tit, language=None)
-                st.caption("Anleser")
-                st.code(anl, language=None)
-                st.caption("Text")
-                st.code(txt, language=None)
-            with c2:
-                st.subheader("SEO")
-                st.caption("Keyword")
-                st.code(key, language=None)
-                st.caption("Snippet")
-                st.code(sni, language=None)
-                
-            full_doc = f"{tit}\n\n{anl}\n\n{txt}"
-            st.download_button("📄 Word-Export", data=create_docx(full_doc), file_name="PJ_Online_News.docx")
-
-        except Exception as e:
-            st.error("Fehler beim Verarbeiten.")
-            st.write(res)
+                st.markdown("**Titel:**"); st.code(tit, language=None)
+                st.markdown("**Anleser:**"); st.code(anl, language=None)
+                st.markdown("**Text:**"); st.code(txt, language=None)
+                st.download_button("📄 Word (News)", create_docx(f"{tit
