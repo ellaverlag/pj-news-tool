@@ -42,6 +42,7 @@ def reset_app():
     st.session_state['input_key'] += 1
     if 'res' in st.session_state: del st.session_state['res']
     if 'img' in st.session_state: del st.session_state['img']
+    if 'og_img' in st.session_state: del st.session_state['og_img']
 
 # --- HEADER ---
 col_logo, col_title = st.columns([1, 5])
@@ -85,7 +86,11 @@ if modus == "Messe-Vorbericht (Special)":
 st.sidebar.markdown("---")
 
 # 3. OPTIONEN & RESET
-generate_img_flag = st.sidebar.checkbox("KI-Beitragsbild generieren?", value=True)
+# Bild-Option ausblenden bei LinkedIn, da wir das Web-Bild nehmen
+generate_img_flag = True
+if modus != "LinkedIn Post (English)":
+    generate_img_flag = st.sidebar.checkbox("KI-Beitragsbild generieren?", value=True)
+
 st.sidebar.button("🗑️ ALLES LÖSCHEN / NEU", on_click=reset_app, type="secondary")
 
 # 4. ARCHIV (GANZ UNTEN)
@@ -147,6 +152,20 @@ def generate_horizontal_image(topic):
         return response.data[0].url
     except: return None
 
+def get_website_og_image(url):
+    """Holt das Open Graph Bild von einer URL"""
+    try:
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+        response = requests.get(url, headers=headers, timeout=5)
+        soup = BeautifulSoup(response.content, 'html.parser')
+        og_image = soup.find("meta", property="og:image")
+        if og_image:
+            return og_image["content"]
+        else:
+            return None
+    except:
+        return None
+
 def create_docx(text_content):
     doc = Document()
     for line in text_content.split('\n'):
@@ -157,7 +176,6 @@ def create_docx(text_content):
 
 def clean_text(text):
     if not text: return ""
-    # Entferne Markdown
     text = str(text).replace('**', '').replace('__', '')
     text = text.replace('### ', '').replace('## ', '').replace('# ', '')
     return text.strip()
@@ -176,12 +194,12 @@ STILREGELN (STRICT):
 if modus == "LinkedIn Post (English)":
     system_prompt = """
     ROLE: Social Media Manager for 'packaging journal'.
-    TASK: Write a LinkedIn post in ENGLISH based on the provided content.
+    TASK: Write a LinkedIn post in ENGLISH based on the provided content/URL.
     STYLE: Short, clear, professional but engaging. Use Emojis (📦, 🌍, 💡, etc.).
     STRUCTURE:
     1. Hook: One punchy sentence to grab attention.
     2. Key Points: 2-3 bullet points summarizing the most important facts (keep it brief).
-    3. Call to Action: "Read more here:" followed by the Link provided in input.
+    3. Call to Action: Use an arrow ➡️ or link 🔗 emoji followed immediately by the URL. Do NOT write "Read more".
     4. Hashtags: Always use #packaging plus 3-4 specific tags.
     
     IMPORTANT: 
@@ -252,9 +270,8 @@ url_in = st.text_input("Link (URL):", key=f"url_{current_key}")
 file_in = st.file_uploader("Datei:", type=["pdf", "docx", "txt"], key=f"file_{current_key}")
 text_in = st.text_area("Oder Text einfügen:", height=150, key=f"text_{current_key}")
 
-# INDIVIDUELLER FOKUS
 custom_focus = st.text_area("🔧 Individueller Fokus / Anweisung (optional):", 
-                            placeholder="z.B. 'Fokus auf Nachhaltigkeit', 'Zielgruppe Startups', 'Lockerer Ton'...", 
+                            placeholder="z.B. 'Fokus auf Nachhaltigkeit', 'Zielgruppe Startups'...", 
                             height=80, key=f"focus_{current_key}")
 
 final_text = ""
@@ -276,16 +293,20 @@ if st.button("✨ INHALTE GENERIEREN", type="primary"):
         st.warning("Bitte Material bereitstellen.")
     else:
         with st.spinner("KI arbeitet..."):
+            
+            # 1. Bild holen, falls URL und LinkedIn Modus
+            if modus == "LinkedIn Post (English)" and url_in:
+                og_link = get_website_og_image(url_in)
+                if og_link: st.session_state['og_img'] = og_link
+            
+            # 2. Text generieren
             model_name = get_best_google_model()
             if model_name:
                 model = genai.GenerativeModel(model_name)
                 
-                # Prompt zusammenbauen
                 full_input = f"{system_prompt}"
                 if custom_focus:
                     full_input += f"\n\nZUSATZ-ANWEISUNG: {custom_focus}"
-                
-                # URL explizit übergeben für LinkedIn
                 if modus == "LinkedIn Post (English)" and url_in:
                     full_input += f"\n\nLINK TO ARTICLE: {url_in}"
                 
@@ -294,8 +315,8 @@ if st.button("✨ INHALTE GENERIEREN", type="primary"):
                 response = model.generate_content(full_input)
                 st.session_state['res'] = response.text
                 
-                # Bild generieren (Option prüfen)
-                if generate_img_flag:
+                # Bild generieren (nur wenn nicht LinkedIn Modus, dort nehmen wir Web-Bild)
+                if generate_img_flag and modus != "LinkedIn Post (English)":
                     st.session_state['img'] = generate_horizontal_image(final_text[:200])
                 else:
                     st.session_state['img'] = None
@@ -308,16 +329,14 @@ if 'res' in st.session_state:
     if modus == "LinkedIn Post (English)":
         st.subheader("LinkedIn Post (English)")
         
-        # Einfache Anzeige
-        st.code(res, language=None)
+        # Zeige das Bild der Website, falls gefunden
+        if 'og_img' in st.session_state:
+            st.image(st.session_state['og_img'], caption=f"Vorschau-Bild von: {url_in}", width=600)
         
-        # Button zum Kopieren in Clipboard-Simulation
-        st.caption("Einfach oben rechts im Kasten auf das Copy-Icon klicken.")
+        st.code(res, language=None)
+        st.caption("Einfach oben rechts kopieren und bei LinkedIn einfügen.")
         
         save_to_history("LinkedIn Post", res[:50] + "...")
-        
-        if st.session_state.get('img'):
-            st.image(st.session_state['img'], caption="Optionales Visual", width=600)
 
     # 2. MESSE VORBERICHT
     elif modus == "Messe-Vorbericht (Special)":
