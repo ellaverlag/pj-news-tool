@@ -55,6 +55,7 @@ def get_best_google_model():
 def generate_horizontal_image(topic):
     try:
         client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+        # Festes horizontales Format 16:9
         response = client.images.generate(
             model="dall-e-3",
             prompt=f"Professional industrial photography for packaging industry, theme: {topic}. High-end cinematic lighting, 16:9 horizontal, photorealistic, no text.",
@@ -63,7 +64,7 @@ def generate_horizontal_image(topic):
         return response.data[0].url
     except: return None
 
-def create_docx(text, filename="PJ_Beitrag.docx"):
+def create_docx(text):
     doc = Document()
     for line in text.split('\n'):
         if line.strip(): doc.add_paragraph(line)
@@ -72,6 +73,16 @@ def create_docx(text, filename="PJ_Beitrag.docx"):
     return bio.getvalue()
 
 # --- PROMPT LOGIK ---
+base_constraints = """
+WICHTIGE REGELN:
+- KEIN Markdown verwenden (KEINE **, KEINE #, KEINE _).
+- Der Text muss reiner Fließtext ohne Formatierungszeichen sein.
+- EINSTIEGE VARIIEREN: Vermeide Standard-Einstiege wie 'Firma XY präsentiert...'. 
+- Nutze stattdessen: Szenische Beschreibungen, aktuelle Problemstellungen aus der Praxis, Trends oder spezifische Use-Cases.
+- Firmennamen normal schreiben (keine Versalien).
+- Keine Ortsmarke, kein Datum.
+"""
+
 if modus == "Messe-Vorbericht (Special)":
     selected_messe = st.sidebar.selectbox("Messe:", ["LogiMat", "interpack", "Fachpack", "SPS"])
     l_opt = st.radio("Print-Länge:", ["KURZ (~900)", "NORMAL (~1300)", "LANG (~2000)"], horizontal=True)
@@ -81,31 +92,33 @@ if modus == "Messe-Vorbericht (Special)":
 
     system_prompt = f"""
     Rolle: Erfahrene:r Fachredakteur:in beim packaging journal.
-    Aufgabe: Erstelle zwei Versionen (PRINT & ONLINE) für {selected_messe}. 
-    KEINE Ortsmarke, KEIN Datum. Einstiege variieren. Firmennamen normal (nicht VERSAL). Website verlinken auf {m_link}.
+    {base_constraints}
+    
+    AUFGABE: Erstelle zwei Versionen für {selected_messe}. Website verlinken auf {m_link}.
     
     FORMAT-VORGABE (STRENG EINHALTEN):
     [PRINT_TITEL]...[PRINT_TEXT]...[PRINT_STAND]
     [ONLINE_TITEL]...[ONLINE_ANLESER]...[ONLINE_TEXT]...[ONLINE_SNIPPET]
     
     PRINT: Ca. {target_len} Zeichen, ohne Zwischenüberschriften.
-    ONLINE: 2500-5000 Zeichen, mit H2-Zwischenüberschriften.
+    ONLINE: 2500-5000 Zeichen, mit Zwischenüberschriften (nur als Textzeile, kein #).
     """
 else:
     l_opt = st.radio("Länge:", ["Kurz (~1200)", "Normal (~2500)", "Lang (~5000)"], horizontal=True)
-    system_prompt = f"Erstelle eine Standard-News. Format: [ONLINE_TITEL], [ONLINE_ANLESER], [ONLINE_TEXT], [ONLINE_SNIPPET]. Länge: {l_opt}."
+    system_prompt = f"Erstelle eine Standard-News. {base_constraints} Format: [ONLINE_TITEL], [ONLINE_ANLESER], [ONLINE_TEXT], [ONLINE_SNIPPET]. Länge: {l_opt}."
 
 # --- INPUTS ---
 url_in = st.text_input("Link (URL):")
 file_in = st.file_uploader("Datei:", type=["pdf", "docx", "txt"])
 text_in = st.text_area("Oder Text einfügen:")
 
+# Extraktion
 final_text = ""
 if url_in:
     try:
         r = requests.get(url_in, timeout=10)
         final_text = BeautifulSoup(r.text, 'html.parser').get_text(separator=' ', strip=True)
-    except: st.error("URL Fehler")
+    except: st.error("Fehler beim Laden der URL")
 elif file_in:
     if file_in.type == "application/pdf":
         pdf = PyPDF2.PdfReader(file_in)
@@ -118,7 +131,7 @@ if st.button("✨ JETZT GENERIEREN", type="primary"):
     if len(final_text) < 20:
         st.warning("Bitte Material bereitstellen.")
     else:
-        with st.spinner("KI erstellt Inhalte..."):
+        with st.spinner("KI erstellt Inhalte ohne Formatierungszeichen..."):
             model_name = get_best_google_model()
             if model_name:
                 model = genai.GenerativeModel(model_name)
@@ -134,37 +147,38 @@ if 'res' in st.session_state:
     tab_p, tab_o = st.tabs(["📟 PRINT VERSION", "🌐 ONLINE (WordPress)"])
     
     with tab_p:
-        # Extraktion für Print
         try:
-            p_titel = res.split('[PRINT_TITEL]')[1].split('[PRINT_TEXT]')[0].strip() if '[PRINT_TITEL]' in res else "Titel"
-            p_text = res.split('[PRINT_TEXT]')[1].split('[PRINT_STAND]')[0].strip() if '[PRINT_TEXT]' in res else res
-            p_stand = res.split('[PRINT_STAND]')[1].strip() if '[PRINT_STAND]' in res else ""
+            p_titel = res.split('[PRINT_TITEL]')[1].split('[PRINT_TEXT]')[0].replace('*', '').strip()
+            p_text = res.split('[PRINT_TEXT]')[1].split('[PRINT_STAND]')[0].replace('*', '').strip()
+            p_stand = res.split('[PRINT_STAND]')[1].replace('*', '').strip()
             
             full_print = f"{p_titel}\n\n{p_text}\n\n{p_stand}"
+            st.subheader("Vorschau Print")
+            st.write(full_print)
+            st.subheader("Kopier-Box")
             st.code(full_print, language=None)
             
             st.download_button("📄 Word-Export (Nur Print)", data=create_docx(full_print), file_name="PJ_Print_Beitrag.docx")
         except:
-            st.write(res)
+            st.code(res.replace('*', ''), language=None)
 
     with tab_o:
         try:
-            o_titel = res.split('[ONLINE_TITEL]')[1].split('[ONLINE_ANLESER]')[0].strip() if '[ONLINE_TITEL]' in res else "Titel"
-            o_anleser = res.split('[ONLINE_ANLESER]')[1].split('[ONLINE_TEXT]')[0].strip() if '[ONLINE_ANLESER]' in res else ""
-            o_text = res.split('[ONLINE_TEXT]')[1].split('[ONLINE_SNIPPET]')[0].strip() if '[ONLINE_TEXT]' in res else ""
-            o_snippet = res.split('[ONLINE_SNIPPET]')[1].strip() if '[ONLINE_SNIPPET]' in res else ""
+            o_titel = res.split('[ONLINE_TITEL]')[1].split('[ONLINE_ANLESER]')[0].replace('*', '').strip()
+            o_anleser = res.split('[ONLINE_ANLESER]')[1].split('[ONLINE_TEXT]')[0].replace('*', '').strip()
+            o_text = res.split('[ONLINE_TEXT]')[1].split('[ONLINE_SNIPPET]')[0].replace('*', '').strip()
+            o_snippet = res.split('[ONLINE_SNIPPET]')[1].replace('*', '').strip()
 
             if st.session_state.get('img'):
-                st.image(st.session_state['img'], caption="Rechtsklick zum Speichern", width=700)
+                st.image(st.session_state['img'], caption="Horizontales Beitragsbild (16:9)", width=800)
             
-            st.subheader("📌 Titel")
+            st.subheader("📌 WordPress Titel")
             st.code(o_titel, language=None)
             st.subheader("📰 Anleser / Teaser")
             st.code(o_anleser, language=None)
             st.subheader("✍️ Haupttext")
-            st.markdown(o_text)
-            st.code(o_text, language=None) # Zweite Box für schnelles Kopieren des HTML/Texts
+            st.code(o_text, language=None)
             st.subheader("🔍 Google Snippet")
             st.code(o_snippet, language=None)
         except:
-            st.write(res)
+            st.code(res.replace('*', ''), language=None)
