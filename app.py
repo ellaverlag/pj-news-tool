@@ -65,8 +65,14 @@ def get_website_og_image(url):
     except: return None
 
 def create_docx(txt):
-    d = Document(); [d.add_paragraph(l) for l in txt.split('\n') if l.strip()]
-    b = BytesIO(); d.save(b); return b.getvalue()
+    d = Document()
+    # Sicherstellen, dass txt ein String ist
+    if txt:
+        for line in str(txt).split('\n'):
+            if line.strip(): d.add_paragraph(line)
+    b = BytesIO()
+    d.save(b)
+    return b.getvalue()
 
 def clean_text(t):
     if not t: return ""
@@ -289,12 +295,11 @@ if 'res' in st.session_state:
     # 3. MESSE SPECIAL
     elif modus == "Messe-Vorbericht (Special)":
         try:
-            # Parsing mit Fallback, falls die KI mal ein Trennzeichen vergisst
+            # Parsing mit Fallback
             p_head = "Unbekannt"
             if '[P_HEADLINE]' in res:
                 p_head = clean_text(res.split('[P_HEADLINE]')[1].split('[P_TEXT]')[0])
             
-            # Wenn Parsing klappt:
             if '[P_OBERZEILE]' in res and '[O_HEADLINE]' in res:
                 p_ober = clean_text(res.split('[P_OBERZEILE]')[1].split('[P_HEADLINE]')[0])
                 p_text = clean_text(res.split('[P_TEXT]')[1].split('[P_WEB]')[0])
@@ -339,4 +344,8 @@ if 'res' in st.session_state:
                 st.markdown("**Titel:**"); st.code(tit, language=None)
                 st.markdown("**Anleser:**"); st.code(anl, language=None)
                 st.markdown("**Text:**"); st.code(txt, language=None)
-                st.download_button("📄 Word (News)", create_docx(f"{tit
+                st.download_button("📄 Word (News)", create_docx(f"{tit}\n{anl}\n{txt}"), "News.docx")
+                save_to_history(f"News: {tit}", anl[:50])
+            else:
+                st.write(res)
+        except: st.write(res)
