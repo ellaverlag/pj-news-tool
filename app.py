@@ -40,11 +40,23 @@ def reset_app():
     for k in keys_to_clear:
         if k in st.session_state: del st.session_state[k]
 
-# --- PUBLER API (ROBUST VERSION) ---
+# --- PUBLER API (ROBUST + BROWSER HEADER) ---
 def get_publer_session():
-    """Erstellt eine Session mit Retry-Strategie gegen Wackelkontakte"""
+    """Erstellt eine Session, die sich als Browser tarnt"""
     session = requests.Session()
-    retry = Retry(connect=3, backoff_factor=0.5)
+    
+    # WICHTIG: User-Agent setzen, damit Publer uns nicht blockiert
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/json"
+    })
+    
+    retry = Retry(
+        total=3, 
+        backoff_factor=1, 
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET", "POST"]
+    )
     adapter = HTTPAdapter(max_retries=retry)
     session.mount('http://', adapter)
     session.mount('https://', adapter)
@@ -52,11 +64,14 @@ def get_publer_session():
 
 def fetch_publer_accounts(api_key):
     url = "https://api.publer.io/v1/accounts"
-    clean_key = api_key.strip() # Entfernt Leerzeichen
+    clean_key = api_key.strip()
     
     try:
         session = get_publer_session()
-        resp = session.get(url, headers={"Authorization": f"Bearer {clean_key}"}, timeout=10)
+        # Authorization Header explizit hier setzen
+        headers = {"Authorization": f"Bearer {clean_key}"}
+        
+        resp = session.get(url, headers=headers, timeout=15)
         
         if resp.status_code == 200:
             data = resp.json()
@@ -66,26 +81,28 @@ def fetch_publer_accounts(api_key):
         else:
             return [], f"API Fehler {resp.status_code}: {resp.text}"
             
-    except requests.exceptions.ConnectionError:
-        return [], "Verbindungsfehler: Konnte 'api.publer.io' nicht erreichen. (DNS/Internet Problem)"
     except Exception as e:
-        return [], f"System-Fehler: {str(e)}"
+        return [], f"Verbindungs-Fehler: {str(e)}"
 
 def post_to_publer(api_key, text, link, media_url, account_ids):
     url = "https://api.publer.io/v1/posts"
     clean_key = api_key.strip()
-    headers = {"Authorization": f"Bearer {clean_key}", "Content-Type": "application/json"}
-    
-    payload = {
-        "text": text,
-        "social_accounts": [{"id": acc_id} for acc_id in account_ids],
-    }
-    if link: payload["link"] = link
-    if media_url: payload["media"] = [{"url": media_url}]
     
     try:
         session = get_publer_session()
-        response = session.post(url, json=payload, headers=headers, timeout=10)
+        headers = {
+            "Authorization": f"Bearer {clean_key}",
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "text": text,
+            "social_accounts": [{"id": acc_id} for acc_id in account_ids],
+        }
+        if link: payload["link"] = link
+        if media_url: payload["media"] = [{"url": media_url}]
+        
+        response = session.post(url, json=payload, headers=headers, timeout=15)
         return response
     except Exception as e: return str(e)
 
@@ -126,18 +143,16 @@ if modus == "Messe-Vorbericht (Special)":
 
 st.sidebar.markdown("---")
 
-# 3. PUBLER SETUP & DEBUG
+# 3. PUBLER SETUP
 publer_key = st.secrets.get("PUBLER_API_KEY", "")
 if not publer_key:
     publer_key = st.sidebar.text_input("Publer API Key:", type="password")
 
-# IDs aus Secrets lesen
 ids_de_raw = st.secrets.get("PUBLER_IDS_DEUTSCH", "")
 ids_en_raw = st.secrets.get("PUBLER_ID_ENGLISCH", "")
 fixed_ids_de = [x.strip() for x in ids_de_raw.split(',')] if ids_de_raw else []
 fixed_ids_en = [x.strip() for x in ids_en_raw.split(',')] if ids_en_raw else []
 
-# Setup-Hilfe anzeigen, wenn IDs fehlen
 if publer_key and (not fixed_ids_de or not fixed_ids_en):
     with st.sidebar.expander("🛠️ Publer IDs finden", expanded=True):
         if st.button("🔄 Konten laden (Retry)"):
@@ -146,9 +161,9 @@ if publer_key and (not fixed_ids_de or not fixed_ids_en):
             else: st.session_state['publer_accounts'] = accs
         
         if st.session_state['publer_accounts']:
-            st.caption("Kopiere die IDs in deine Secrets:")
+            st.caption("IDs für Secrets:")
             for acc in st.session_state['publer_accounts']:
-                name = acc.get('name', 'Unbekannt')
+                name = acc.get('name', '?')
                 aid = acc.get('id', '?')
                 atype = acc.get('type', '?')
                 st.markdown(f"**{name}** ({atype})")
@@ -181,7 +196,7 @@ if os.path.isfile(HISTORY_FILE):
                 st.caption(f"{r['Datum']}: {r['Titel']}")
         except: pass
 
-# ================= MAIN LOGIK =================
+# ================= MAIN =================
 
 def get_best_google_model():
     try:
@@ -210,7 +225,7 @@ def create_docx(txt):
 
 def clean_text(t): return str(t).replace('**','').replace('__','').replace('### ','').replace('## ','').strip() if t else ""
 
-# --- PROMPTS ---
+# PROMPTS
 base_rules = "ROLLE: Fachjournalist packaging journal. STIL: Sachlich. FORMAT: REINER TEXT, KEIN MARKDOWN."
 
 if modus == "LinkedIn Post (English)":
@@ -241,7 +256,7 @@ else:
     l_opt = st.radio("Länge:", ["KURZ (2-4k)", "NORMAL (6-9k)", "LANG (12-15k)"], horizontal=True)
     system_prompt = f"{base_rules} TASK: Fach-News Online. FORMAT: [TITEL]...[ANLESER]...[TEXT]...[SNIPPET]...[KEYWORD]"
 
-# --- INPUTS ---
+# INPUTS
 ck = st.session_state['input_key']
 url_in = st.text_input("Link (URL):", key=f"url_{ck}")
 file_in = st.file_uploader("Datei:", key=f"file_{ck}")
@@ -257,7 +272,7 @@ elif file_in:
     else: final_text = docx2txt.process(file_in)
 else: final_text = text_in
 
-# --- GENERIERUNG ---
+# GENERIEREN
 if st.button("✨ GENERIEREN", type="primary"):
     if len(final_text) < 20: st.warning("Input fehlt.")
     else:
@@ -279,11 +294,11 @@ if st.button("✨ GENERIEREN", type="primary"):
             if not is_social and st.sidebar.checkbox("Bild?", value=True):
                  st.session_state['img'] = generate_horizontal_image(final_text[:200])
 
-# --- AUSGABE ---
+# AUSGABE
 if 'res' in st.session_state:
     res = st.session_state['res']
     
-    # 1. LINKEDIN ENGLISCH
+    # LINKEDIN ENGLISCH
     if modus == "LinkedIn Post (English)":
         st.subheader("LinkedIn (English)")
         if 'og_img' in st.session_state: st.image(st.session_state['og_img'], width=400)
@@ -297,7 +312,7 @@ if 'res' in st.session_state:
                 else: st.error(f"Fehler: {stat}")
         save_to_history("LinkedIn EN", res[:50])
 
-    # 2. SOCIAL DEUTSCH
+    # SOCIAL DEUTSCH
     elif modus == "Social Media (Deutsch)":
         st.subheader("Social Media (Deutsch)")
         if 'og_img' in st.session_state: st.image(st.session_state['og_img'], width=400)
@@ -310,7 +325,7 @@ if 'res' in st.session_state:
                 st.markdown("**LinkedIn (Lang)**")
                 st.code(li, language=None)
                 if publer_key and fixed_ids_de:
-                    if st.button(f"🚀 Senden (Deutsch/2 Konten)"):
+                    if st.button(f"🚀 Senden (Deutsch)"):
                         media = st.session_state.get('og_img')
                         stat = post_to_publer(publer_key, li, url_in, media, fixed_ids_de)
                         if hasattr(stat, 'status_code') and stat.status_code in [200,201]: st.success("Gesendet!")
@@ -321,15 +336,15 @@ if 'res' in st.session_state:
             save_to_history("Social DE", li[:50])
         except: st.write(res)
 
-    # 3. MESSE
+    # MESSE
     elif modus == "Messe-Vorbericht (Special)":
         try:
             p_head = clean_text(res.split('[P_HEADLINE]')[1].split('[P_TEXT]')[0])
-            st.write(res) # Fallback für User falls Parsing hakt
+            st.write(res)
             save_to_history(f"Messe: {p_head}", "Bericht")
         except: st.write(res)
 
-    # 4. NEWS
+    # NEWS
     else:
         try:
             tit = clean_text(res.split('[TITEL]')[1].split('[ANLESER]')[0])
