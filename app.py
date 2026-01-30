@@ -55,7 +55,7 @@ def get_best_google_model():
 def generate_horizontal_image(topic):
     try:
         client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
-        # Festes horizontales Format 16:9
+        # Festgelegtes horizontales Format (16:9) gemäß deinem Wunsch
         response = client.images.generate(
             model="dall-e-3",
             prompt=f"Professional industrial photography for packaging industry, theme: {topic}. High-end cinematic lighting, 16:9 horizontal, photorealistic, no text.",
@@ -74,38 +74,43 @@ def create_docx(text):
 
 # --- PROMPT LOGIK ---
 base_constraints = """
-WICHTIGE REGELN:
-- KEIN Markdown verwenden (KEINE **, KEINE #, KEINE _).
-- Der Text muss reiner Fließtext ohne Formatierungszeichen sein.
-- EINSTIEGE VARIIEREN: Vermeide Standard-Einstiege wie 'Firma XY präsentiert...'. 
-- Nutze stattdessen: Szenische Beschreibungen, aktuelle Problemstellungen aus der Praxis, Trends oder spezifische Use-Cases.
-- Firmennamen normal schreiben (keine Versalien).
-- Keine Ortsmarke, kein Datum.
+WICHTIGE REDAKTIONELLE REGELN:
+- KEIN Markdown verwenden (KEINE **, KEINE #, KEINE _). Reintext!
+- KEINE Ortsmarke, KEIN Datum am Anfang.
+- KEIN 'Über Firma XY' oder Hintergrund-Unternehmensprofile.
+- KEIN PR-Sprech wie 'Besuchen Sie uns', 'Wir freuen uns'. Journalistisch neutral bleiben.
+- Einstiege VARIATION: Nicht mit 'Firma XY präsentiert' starten. Nutze Problemstellungen, Use Cases oder Trends.
+- Firmennamen normal (nicht VERSAL).
 """
 
 if modus == "Messe-Vorbericht (Special)":
     selected_messe = st.sidebar.selectbox("Messe:", ["LogiMat", "interpack", "Fachpack", "SPS"])
-    l_opt = st.radio("Print-Länge:", ["KURZ (~900)", "NORMAL (~1300)", "LANG (~2000)"], horizontal=True)
+    l_opt = st.radio("Print-Länge (Strikt einhalten):", ["KURZ (~900)", "NORMAL (~1300)", "LANG (~2000)"], horizontal=True)
     m_links = {"LogiMat": "https://www.logimat-messe.de/de/die-messe/ausstellerliste", "interpack": "https://www.interpack.de/de/Aussteller_Produkte/Ausstellerverzeichnis", "Fachpack": "https://www.fachpack.de/de/aussteller-produkte/ausstellerliste", "SPS": "https://sps.mesago.com/nuernberg/de/ausstellersuche.html"}
     m_link = m_links.get(selected_messe, "")
     target_len = l_opt.split("~")[1].replace(")", "")
 
     system_prompt = f"""
-    Rolle: Erfahrene:r Fachredakteur:in beim packaging journal.
+    Rolle: Fachredakteur:in beim packaging journal.
     {base_constraints}
     
-    AUFGABE: Erstelle zwei Versionen für {selected_messe}. Website verlinken auf {m_link}.
+    AUFGABE: Erstelle zwei Versionen für {selected_messe}. 
     
-    FORMAT-VORGABE (STRENG EINHALTEN):
+    1. PRINT: 
+    - Länge: EXAKT ca. {target_len} Zeichen. 
+    - Struktur: Oberzeile (Firma), Headline, Text (SOFORTIGER EINSTIEG OHNE ANLESER), Website ({m_link}), Halle/Standnummer.
+    
+    2. ONLINE: 
+    - Länge: 2500-5000 Zeichen.
+    - Struktur: Headline, Anleser (MAX 300 Zeichen), Haupttext mit H2-Zwischenüberschriften (ohne #), Halle/Standnummer, SEO-Snippet (max 160).
+    
+    FORMAT-VORGABE:
     [PRINT_TITEL]...[PRINT_TEXT]...[PRINT_STAND]
     [ONLINE_TITEL]...[ONLINE_ANLESER]...[ONLINE_TEXT]...[ONLINE_SNIPPET]
-    
-    PRINT: Ca. {target_len} Zeichen, ohne Zwischenüberschriften.
-    ONLINE: 2500-5000 Zeichen, mit Zwischenüberschriften (nur als Textzeile, kein #).
     """
 else:
     l_opt = st.radio("Länge:", ["Kurz (~1200)", "Normal (~2500)", "Lang (~5000)"], horizontal=True)
-    system_prompt = f"Erstelle eine Standard-News. {base_constraints} Format: [ONLINE_TITEL], [ONLINE_ANLESER], [ONLINE_TEXT], [ONLINE_SNIPPET]. Länge: {l_opt}."
+    system_prompt = f"Erstelle eine Standard-News. {base_constraints} Headline, Anleser (MAX 300 Zeichen), Text, Snippet. Länge: {l_opt}."
 
 # --- INPUTS ---
 url_in = st.text_input("Link (URL):")
@@ -131,7 +136,7 @@ if st.button("✨ JETZT GENERIEREN", type="primary"):
     if len(final_text) < 20:
         st.warning("Bitte Material bereitstellen.")
     else:
-        with st.spinner("KI erstellt Inhalte ohne Formatierungszeichen..."):
+        with st.spinner("KI erstellt Inhalte..."):
             model_name = get_best_google_model()
             if model_name:
                 model = genai.GenerativeModel(model_name)
@@ -153,11 +158,8 @@ if 'res' in st.session_state:
             p_stand = res.split('[PRINT_STAND]')[1].replace('*', '').strip()
             
             full_print = f"{p_titel}\n\n{p_text}\n\n{p_stand}"
-            st.subheader("Vorschau Print")
-            st.write(full_print)
-            st.subheader("Kopier-Box")
+            st.subheader("Kopier-Box (Nur Text)")
             st.code(full_print, language=None)
-            
             st.download_button("📄 Word-Export (Nur Print)", data=create_docx(full_print), file_name="PJ_Print_Beitrag.docx")
         except:
             st.code(res.replace('*', ''), language=None)
@@ -174,7 +176,7 @@ if 'res' in st.session_state:
             
             st.subheader("📌 WordPress Titel")
             st.code(o_titel, language=None)
-            st.subheader("📰 Anleser / Teaser")
+            st.subheader("📰 Anleser / Teaser (max 300 Zeichen)")
             st.code(o_anleser, language=None)
             st.subheader("✍️ Haupttext")
             st.code(o_text, language=None)
