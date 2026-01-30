@@ -3,6 +3,8 @@ import google.generativeai as genai
 import docx2txt
 import PyPDF2
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from bs4 import BeautifulSoup
 from docx import Document
 from io import BytesIO
@@ -38,27 +40,42 @@ def reset_app():
     for k in keys_to_clear:
         if k in st.session_state: del st.session_state[k]
 
-# --- PUBLER API (DEBUG VERSION) ---
+# --- PUBLER API (ROBUST VERSION) ---
+def get_publer_session():
+    """Erstellt eine Session mit Retry-Strategie gegen Wackelkontakte"""
+    session = requests.Session()
+    retry = Retry(connect=3, backoff_factor=0.5)
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount('http://', adapter)
+    session.mount('https://', adapter)
+    return session
+
 def fetch_publer_accounts(api_key):
     url = "https://api.publer.io/v1/accounts"
+    clean_key = api_key.strip() # Entfernt Leerzeichen
+    
     try:
-        resp = requests.get(url, headers={"Authorization": f"Bearer {api_key}"})
+        session = get_publer_session()
+        resp = session.get(url, headers={"Authorization": f"Bearer {clean_key}"}, timeout=10)
+        
         if resp.status_code == 200:
             data = resp.json()
-            # Publer gibt manchmal {data: [...]} oder direkt [...] zurück
             if isinstance(data, list): return data, None
             elif isinstance(data, dict) and 'data' in data: return data['data'], None
             else: return data, None
         else:
-            return [], f"Fehler {resp.status_code}: {resp.text}"
+            return [], f"API Fehler {resp.status_code}: {resp.text}"
+            
+    except requests.exceptions.ConnectionError:
+        return [], "Verbindungsfehler: Konnte 'api.publer.io' nicht erreichen. (DNS/Internet Problem)"
     except Exception as e:
         return [], f"System-Fehler: {str(e)}"
 
 def post_to_publer(api_key, text, link, media_url, account_ids):
     url = "https://api.publer.io/v1/posts"
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    clean_key = api_key.strip()
+    headers = {"Authorization": f"Bearer {clean_key}", "Content-Type": "application/json"}
     
-    # Payload bauen
     payload = {
         "text": text,
         "social_accounts": [{"id": acc_id} for acc_id in account_ids],
@@ -67,10 +84,8 @@ def post_to_publer(api_key, text, link, media_url, account_ids):
     if media_url: payload["media"] = [{"url": media_url}]
     
     try:
-        # Wir senden ohne 'schedule_date', das triggert meist den Standard (Sofort oder Queue)
-        # Wenn du explizit Drafts willst, müsste man das je nach API Version anpassen.
-        # V1 interpretiert POST oft als "Schedule Now".
-        response = requests.post(url, json=payload, headers=headers)
+        session = get_publer_session()
+        response = session.post(url, json=payload, headers=headers, timeout=10)
         return response
     except Exception as e: return str(e)
 
@@ -125,7 +140,7 @@ fixed_ids_en = [x.strip() for x in ids_en_raw.split(',')] if ids_en_raw else []
 # Setup-Hilfe anzeigen, wenn IDs fehlen
 if publer_key and (not fixed_ids_de or not fixed_ids_en):
     with st.sidebar.expander("🛠️ Publer IDs finden", expanded=True):
-        if st.button("🔄 Konten laden"):
+        if st.button("🔄 Konten laden (Retry)"):
             accs, err = fetch_publer_accounts(publer_key)
             if err: st.error(err)
             else: st.session_state['publer_accounts'] = accs
