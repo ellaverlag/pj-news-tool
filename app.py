@@ -9,45 +9,40 @@ from io import BytesIO
 from openai import OpenAI
 import os
 
-# --- KONFIGURATION & BRANDING ---
+# --- BRANDING & FARBEN ---
 st.set_page_config(page_title="packaging journal Redaktions Tool", page_icon="🚀", layout="wide")
 
-# Hausfarbe: #24A27F
-st.markdown(f"""
+st.markdown("""
     <style>
-    .stApp {{ background-color: #f8f9fa; }}
-    .stButton>button {{ 
+    .stApp { background-color: #f8f9fa; }
+    .stButton>button { 
         width: 100%; border-radius: 8px; height: 3.5em; 
         background-color: #24A27F !important; color: white !important; 
         font-weight: bold; border: none;
-    }}
-    .stTabs [data-baseweb="tab-list"] {{ gap: 24px; }}
-    .stTabs [data-baseweb="tab"] {{ 
-        height: 50px; white-space: pre-wrap; background-color: #ffffff; 
-        border-radius: 5px; padding: 10px 20px; color: #24A27F;
-    }}
-    .stTabs [aria-selected="true"] {{ border-bottom: 3px solid #24A27F !important; font-weight: bold; }}
-    .stCode {{ border: 1px solid #24A27F !important; border-radius: 5px; }}
+    }
+    .stCode { border: 1px solid #24A27F !important; border-radius: 5px; background-color: #ffffff !important; }
+    h3 { color: #24A27F; margin-top: 20px; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- HEADER MIT LOGO ---
-col_logo, col_title = st.columns([1, 4])
+# --- HEADER ---
+col_logo, col_title = st.columns([1, 5])
 with col_logo:
-    # Falls du ein Logo hast, ersetze das durch st.image("logo.png")
-    st.markdown(f"<h1 style='color: #24A27F; margin:0;'>pj</h1>", unsafe_allow_html=True)
+    st.markdown("<h1 style='color: #24A27F; margin:0;'>pj</h1>", unsafe_allow_html=True)
 with col_title:
     st.markdown("<h1 style='margin:0;'>Redaktions Tool</h1>", unsafe_allow_html=True)
 
-# --- LOGIN & SIDEBAR ---
+# --- SIDEBAR ---
+st.sidebar.header("🔐 Login")
 pw_input = st.sidebar.text_input("Passwort:", type="password")
 if pw_input != st.secrets.get("TOOL_PASSWORD", "pj-redaktion-2026"):
+    st.sidebar.warning("Bitte Passwort eingeben.")
     st.stop()
 
-modus = st.sidebar.radio("Was erstellen wir?", ["Standard Online-News", "Messe-Vorbericht (Special)"])
+modus = st.sidebar.radio("Erstellungs-Modus:", ["Standard Online-News", "Messe-Vorbericht (Special)"])
 generate_img_flag = st.sidebar.checkbox("KI-Beitragsbild generieren?", value=True)
 
-# --- FUNKTIONEN ---
+# --- HILFSFUNKTIONEN ---
 def get_best_google_model():
     try:
         genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
@@ -62,82 +57,114 @@ def generate_horizontal_image(topic):
         client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
         response = client.images.generate(
             model="dall-e-3",
-            prompt=f"Professional industrial photography for packaging industry, theme: {topic}. High-end cinematic lighting, 16:9 horizontal, no text.",
+            prompt=f"Professional industrial photography for packaging industry, theme: {topic}. High-end cinematic lighting, 16:9 horizontal, photorealistic, no text.",
             size="1792x1024", quality="standard", n=1
         )
         return response.data[0].url
     except: return None
 
-# --- PROMPT DEFINITION (Strikt nach deinem Dokument) ---
+def create_docx(text, filename="PJ_Beitrag.docx"):
+    doc = Document()
+    for line in text.split('\n'):
+        if line.strip(): doc.add_paragraph(line)
+    bio = BytesIO()
+    doc.save(bio)
+    return bio.getvalue()
+
+# --- PROMPT LOGIK ---
 if modus == "Messe-Vorbericht (Special)":
     selected_messe = st.sidebar.selectbox("Messe:", ["LogiMat", "interpack", "Fachpack", "SPS"])
     l_opt = st.radio("Print-Länge:", ["KURZ (~900)", "NORMAL (~1300)", "LANG (~2000)"], horizontal=True)
     m_links = {"LogiMat": "https://www.logimat-messe.de/de/die-messe/ausstellerliste", "interpack": "https://www.interpack.de/de/Aussteller_Produkte/Ausstellerverzeichnis", "Fachpack": "https://www.fachpack.de/de/aussteller-produkte/ausstellerliste", "SPS": "https://sps.mesago.com/nuernberg/de/ausstellersuche.html"}
     m_link = m_links.get(selected_messe, "")
-    
+    target_len = l_opt.split("~")[1].replace(")", "")
+
     system_prompt = f"""
-    Du bist Redakteur beim packaging journal. Erstelle zwei Versionen eines Messe-Vorberichts für {selected_messe}. 
-    KEINE Einleitungstexte, KEINE Ortsmarken, KEIN Datum. Starte direkt mit dem Format.
+    Rolle: Erfahrene:r Fachredakteur:in beim packaging journal.
+    Aufgabe: Erstelle zwei Versionen (PRINT & ONLINE) für {selected_messe}. 
+    KEINE Ortsmarke, KEIN Datum. Einstiege variieren. Firmennamen normal (nicht VERSAL). Website verlinken auf {m_link}.
     
-    STILREGELN: Kein PR-Fluff, Firmennamen normal (nicht VERSAL), Standnummern immer explizit nennen. Einstiege variieren (Trend, Use Case etc.).
-
-    FORMAT FÜR DIE ANTWORT (STRENG EINHALTEN):
-    [PRINT_START]
-    Oberzeile: [Firma]
-    Headline: [Max 6 Wörter]
-    Text: [Ca. {l_opt.split('~')[1].replace(')', '')} Zeichen, ohne ZÜ]
-    Website: [URL]
-    Stand: [Halle/Stand]
-    [PRINT_END]
-
-    [ONLINE_START]
-    Firma: [Firma]
-    Überschrift: [Prägnant]
-    Anleser: [2-3 Sätze]
-    Text: [2500-5000 Zeichen, mit H2-Zwischenüberschriften]
-    Stand: [Halle/Stand]
-    Snippet: [Max 160 Zeichen]
-    [ONLINE_END]
+    FORMAT-VORGABE (STRENG EINHALTEN):
+    [PRINT_TITEL]...[PRINT_TEXT]...[PRINT_STAND]
+    [ONLINE_TITEL]...[ONLINE_ANLESER]...[ONLINE_TEXT]...[ONLINE_SNIPPET]
+    
+    PRINT: Ca. {target_len} Zeichen, ohne Zwischenüberschriften.
+    ONLINE: 2500-5000 Zeichen, mit H2-Zwischenüberschriften.
     """
 else:
-    # Standard News Logik
-    system_prompt = "Erstelle eine Online-News gemäß packaging journal Standards."
+    l_opt = st.radio("Länge:", ["Kurz (~1200)", "Normal (~2500)", "Lang (~5000)"], horizontal=True)
+    system_prompt = f"Erstelle eine Standard-News. Format: [ONLINE_TITEL], [ONLINE_ANLESER], [ONLINE_TEXT], [ONLINE_SNIPPET]. Länge: {l_opt}."
 
-# --- HAUPTBEREICH INPUTS ---
-url_in = st.text_input("Quell-URL:")
-file_in = st.file_uploader("Datei hochladen:", type=["pdf", "docx"])
-text_in = st.text_area("Oder Text hier rein:")
+# --- INPUTS ---
+url_in = st.text_input("Link (URL):")
+file_in = st.file_uploader("Datei:", type=["pdf", "docx", "txt"])
+text_in = st.text_area("Oder Text einfügen:")
 
-# (Extraktions-Logik hier einfügen)
-final_text = text_in # Vereinfacht für das Beispiel
+final_text = ""
+if url_in:
+    try:
+        r = requests.get(url_in, timeout=10)
+        final_text = BeautifulSoup(r.text, 'html.parser').get_text(separator=' ', strip=True)
+    except: st.error("URL Fehler")
+elif file_in:
+    if file_in.type == "application/pdf":
+        pdf = PyPDF2.PdfReader(file_in)
+        final_text = " ".join([p.extract_text() for p in pdf.pages])
+    else: final_text = docx2txt.process(file_in)
+else: final_text = text_in
 
 # --- GENERIERUNG ---
-if st.button("✨ INHALTE GENERIEREN"):
-    with st.spinner("KI arbeitet..."):
-        model_name = get_best_google_model()
-        model = genai.GenerativeModel(model_name)
-        response = model.generate_content(f"{system_prompt}\n\nMATERIAL: {final_text}")
-        st.session_state['raw_output'] = response.text
-        if generate_img_flag:
-            st.session_state['last_image'] = generate_horizontal_image(final_text[:200])
+if st.button("✨ JETZT GENERIEREN", type="primary"):
+    if len(final_text) < 20:
+        st.warning("Bitte Material bereitstellen.")
+    else:
+        with st.spinner("KI erstellt Inhalte..."):
+            model_name = get_best_google_model()
+            if model_name:
+                model = genai.GenerativeModel(model_name)
+                response = model.generate_content(f"{system_prompt}\n\nMATERIAL: {final_text}")
+                st.session_state['res'] = response.text
+                if generate_img_flag:
+                    st.session_state['img'] = generate_horizontal_image(final_text[:200])
 
-# --- AUSGABE IN TABS ---
-if 'raw_output' in st.session_state:
-    raw = st.session_state['raw_output']
+# --- AUSGABE ---
+if 'res' in st.session_state:
+    res = st.session_state['res']
     
-    tab1, tab2 = st.tabs(["📟 PRINT VERSION", "🌐 ONLINE VERSION"])
+    tab_p, tab_o = st.tabs(["📟 PRINT VERSION", "🌐 ONLINE (WordPress)"])
     
-    with tab1:
-        if "[PRINT_START]" in raw:
-            print_content = raw.split("[PRINT_START]")[1].split("[PRINT_END]")[0].strip()
-            st.code(print_content, language=None)
-    
-    with tab2:
-        if "[ONLINE_START]" in raw:
-            online_content = raw.split("[ONLINE_START]")[1].split("[ONLINE_END]")[0].strip()
+    with tab_p:
+        # Extraktion für Print
+        try:
+            p_titel = res.split('[PRINT_TITEL]')[1].split('[PRINT_TEXT]')[0].strip() if '[PRINT_TITEL]' in res else "Titel"
+            p_text = res.split('[PRINT_TEXT]')[1].split('[PRINT_STAND]')[0].strip() if '[PRINT_TEXT]' in res else res
+            p_stand = res.split('[PRINT_STAND]')[1].strip() if '[PRINT_STAND]' in res else ""
             
-            # Bild anzeigen falls generiert
-            if st.session_state.get('last_image'):
-                st.image(st.session_state['last_image'], width=600)
+            full_print = f"{p_titel}\n\n{p_text}\n\n{p_stand}"
+            st.code(full_print, language=None)
             
-            st.code(online_content, language=None)
+            st.download_button("📄 Word-Export (Nur Print)", data=create_docx(full_print), file_name="PJ_Print_Beitrag.docx")
+        except:
+            st.write(res)
+
+    with tab_o:
+        try:
+            o_titel = res.split('[ONLINE_TITEL]')[1].split('[ONLINE_ANLESER]')[0].strip() if '[ONLINE_TITEL]' in res else "Titel"
+            o_anleser = res.split('[ONLINE_ANLESER]')[1].split('[ONLINE_TEXT]')[0].strip() if '[ONLINE_ANLESER]' in res else ""
+            o_text = res.split('[ONLINE_TEXT]')[1].split('[ONLINE_SNIPPET]')[0].strip() if '[ONLINE_TEXT]' in res else ""
+            o_snippet = res.split('[ONLINE_SNIPPET]')[1].strip() if '[ONLINE_SNIPPET]' in res else ""
+
+            if st.session_state.get('img'):
+                st.image(st.session_state['img'], caption="Rechtsklick zum Speichern", width=700)
+            
+            st.subheader("📌 Titel")
+            st.code(o_titel, language=None)
+            st.subheader("📰 Anleser / Teaser")
+            st.code(o_anleser, language=None)
+            st.subheader("✍️ Haupttext")
+            st.markdown(o_text)
+            st.code(o_text, language=None) # Zweite Box für schnelles Kopieren des HTML/Texts
+            st.subheader("🔍 Google Snippet")
+            st.code(o_snippet, language=None)
+        except:
+            st.write(res)
