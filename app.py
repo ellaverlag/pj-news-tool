@@ -56,17 +56,27 @@ def generate_horizontal_image(topic):
     except: return None
 
 def get_website_og_image(url):
+    """Holt das Vorschaubild robust. Bei Fehler gibt es None zurück (kein Absturz)."""
     try:
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        r = requests.get(url, headers=headers, timeout=5)
-        soup = BeautifulSoup(r.content, 'html.parser')
-        og = soup.find("meta", property="og:image")
-        return og["content"] if og else None
-    except: return None
+        # Tarnung als Browser, um 403-Fehler zu vermeiden
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
+        r = requests.get(url, headers=headers, timeout=3) # Kurzes Timeout
+        if r.status_code == 200:
+            soup = BeautifulSoup(r.content, 'html.parser')
+            og = soup.find("meta", property="og:image")
+            # Fallback falls property="og:image" nicht geht, versuche name="og:image"
+            if not og:
+                og = soup.find("meta", attrs={"name": "og:image"})
+            
+            if og and "content" in og.attrs:
+                return og["content"]
+        return None
+    except:
+        # Bei JEDEM Netzwerkfehler (DNS, Timeout) einfach "Kein Bild" zurückgeben
+        return None
 
 def create_docx(txt):
     d = Document()
-    # Sicherstellen, dass txt ein String ist
     if txt:
         for line in str(txt).split('\n'):
             if line.strip(): d.add_paragraph(line)
@@ -76,6 +86,7 @@ def create_docx(txt):
 
 def clean_text(t):
     if not t: return ""
+    # Entfernt Markdown Bolding und Headlines für sauberes Copy/Paste
     return str(t).replace('**','').replace('__','').replace('### ','').replace('## ','').strip()
 
 # --- HEADER ---
@@ -161,7 +172,7 @@ STRIKTE REGELN FÜR NEUTRALITÄT (Verstoß = Fehler):
 base_rules = f"""
 ROLLE: Fachjournalist für das 'packaging journal'. 
 TON: Nüchtern, faktisch, technisch, distanziert.
-FORMAT: REINER TEXT, KEIN MARKDOWN.
+FORMAT: REINER TEXT, KEIN MARKDOWN (keine **Fettung**).
 {anti_pr_rules}
 """
 
@@ -230,7 +241,7 @@ custom_focus = st.text_area("🔧 Individueller Fokus / Anweisung (optional):", 
 final_text = ""
 if url_in:
     try: r = requests.get(url_in, timeout=10); final_text = BeautifulSoup(r.text, 'html.parser').get_text(separator=' ', strip=True)
-    except: st.error("URL Fehler")
+    except: st.error("URL Fehler (Seite nicht lesbar)")
 elif file_in:
     if file_in.type == "application/pdf": p = PyPDF2.PdfReader(file_in); final_text = " ".join([page.extract_text() for page in p.pages])
     else: final_text = docx2txt.process(file_in)
@@ -243,7 +254,7 @@ if st.button("✨ INHALTE GENERIEREN", type="primary"):
         with st.spinner("KI arbeitet..."):
             is_social = "LinkedIn" in modus or "Social" in modus
             
-            # Bild laden für Social (vom Link)
+            # Bild laden für Social (vom Link) - JETZT ROBUST
             if is_social and url_in:
                 og = get_website_og_image(url_in)
                 if og: st.session_state['og_img'] = og
@@ -269,18 +280,23 @@ if 'res' in st.session_state:
     # 1. LINKEDIN ENGLISCH
     if modus == "LinkedIn Post (English)":
         st.subheader("LinkedIn (English)")
-        if 'og_img' in st.session_state: st.image(st.session_state['og_img'], caption="Vorschau-Bild der URL", width=500)
-        st.code(res, language=None)
+        if 'og_img' in st.session_state: 
+            st.image(st.session_state['og_img'], caption="Vorschau-Bild der URL", width=500)
+        
+        # Clean Text anwenden um Markdown zu entfernen
+        clean_res = clean_text(res)
+        st.code(clean_res, language=None)
         st.caption("Oben rechts klicken zum Kopieren.")
-        save_to_history("LinkedIn EN", res[:50])
+        save_to_history("LinkedIn EN", clean_res[:50])
 
     # 2. SOCIAL DEUTSCH
     elif modus == "Social Media (Deutsch)":
         st.subheader("Social Media (Deutsch)")
-        if 'og_img' in st.session_state: st.image(st.session_state['og_img'], caption="Vorschau-Bild der URL", width=500)
+        if 'og_img' in st.session_state: 
+            st.image(st.session_state['og_img'], caption="Vorschau-Bild der URL", width=500)
         try:
-            li = res.split('[LINKEDIN]')[1].split('[TWITTER]')[0].strip()
-            tw = res.split('[TWITTER]')[1].strip()
+            li = clean_text(res.split('[LINKEDIN]')[1].split('[TWITTER]')[0])
+            tw = clean_text(res.split('[TWITTER]')[1])
             
             c1, c2 = st.columns(2)
             with c1:
@@ -344,7 +360,10 @@ if 'res' in st.session_state:
                 st.markdown("**Titel:**"); st.code(tit, language=None)
                 st.markdown("**Anleser:**"); st.code(anl, language=None)
                 st.markdown("**Text:**"); st.code(txt, language=None)
-                st.download_button("📄 Word (News)", create_docx(f"{tit}\n{anl}\n{txt}"), "News.docx")
+                
+                # Sicherer String-Bau für Download Button
+                full_doc_text = tit + "\n\n" + anl + "\n\n" + txt
+                st.download_button("📄 Word (News)", create_docx(full_doc_text), "News.docx")
                 save_to_history(f"News: {tit}", anl[:50])
             else:
                 st.write(res)
