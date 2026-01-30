@@ -28,6 +28,8 @@ st.markdown("""
         background-color: #24A27F !important;
         color: white !important;
     }
+    /* Sidebar Optimierung */
+    [data-testid="stSidebar"] { border-right: 1px solid #e0e0e0; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -48,29 +50,51 @@ with col_logo:
 with col_title:
     st.markdown("<h1 style='margin:0;'>Redaktions Tool</h1>", unsafe_allow_html=True)
 
-# --- SIDEBAR: LOGIN ---
+# ==========================================
+# SIDEBAR STRUKTUR
+# ==========================================
+
 st.sidebar.header("🔐 Login")
 pw_input = st.sidebar.text_input("Passwort:", type="password")
 if pw_input != st.secrets.get("TOOL_PASSWORD", "pj-redaktion-2026"):
     st.sidebar.warning("Bitte Passwort eingeben.")
     st.stop()
 
-# --- SIDEBAR: BUTTONS & MODUS ---
-st.sidebar.markdown("---")
-st.sidebar.button("🗑️ ALLES LÖSCHEN / NEU", on_click=reset_app, type="secondary")
 st.sidebar.markdown("---")
 
+# 1. ERSTELLUNGS-MODUS
 modus = st.sidebar.radio("Erstellungs-Modus:", ["Standard Online-News", "Messe-Vorbericht (Special)"])
-generate_img_flag = st.sidebar.checkbox("KI-Beitragsbild generieren?", value=True)
 
-# --- SIDEBAR: ARCHIV (JETZT UNTEN) ---
+# 2. MESSE AUSWAHL (Direkt darunter, wenn aktiv)
+selected_messe = ""
+m_link = ""
+if modus == "Messe-Vorbericht (Special)":
+    selected_messe = st.sidebar.selectbox("Welche Messe?", ["LogiMat", "interpack", "Fachpack", "SPS"])
+    m_links = {
+        "LogiMat": "https://www.logimat-messe.de/de/die-messe/ausstellerliste",
+        "interpack": "https://www.interpack.de/de/Aussteller_Produkte/Ausstellerverzeichnis",
+        "Fachpack": "https://www.fachpack.de/de/aussteller-produkte/ausstellerliste",
+        "SPS": "https://sps.mesago.com/nuernberg/de/ausstellersuche.html"
+    }
+    m_link = m_links.get(selected_messe, "")
+
+st.sidebar.markdown("---")
+
+# 3. OPTIONEN & RESET
+generate_img_flag = st.sidebar.checkbox("KI-Beitragsbild generieren?", value=True)
+st.sidebar.button("🗑️ ALLES LÖSCHEN / NEU", on_click=reset_app, type="secondary")
+
+# 4. ARCHIV (GANZ UNTEN)
 HISTORY_FILE = "news_history.csv"
 
 def save_to_history(titel, inhalt_snippet):
     datum = datetime.now().strftime("%d.%m. %H:%M")
-    # Titel bereinigen, falls er noch Markdown enthält
-    clean_titel = titel.replace('*', '').replace('#', '').strip()
-    new_entry = pd.DataFrame([{"Datum": datum, "Titel": clean_titel, "Snippet": inhalt_snippet}])
+    # Bereinigung gegen CSV-Fehler
+    if not titel or str(titel).lower() == 'nan': titel = "Unbekannter Titel"
+    clean_titel = str(titel).replace(';', '').replace('\n', ' ').strip()
+    clean_snippet = str(inhalt_snippet).replace(';', '').replace('\n', ' ').strip()
+    
+    new_entry = pd.DataFrame([{"Datum": datum, "Titel": clean_titel, "Snippet": clean_snippet}])
     
     if not os.path.isfile(HISTORY_FILE):
         new_entry.to_csv(HISTORY_FILE, index=False, sep=";")
@@ -79,17 +103,29 @@ def save_to_history(titel, inhalt_snippet):
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("📚 Letzte Beiträge")
+
 if os.path.isfile(HISTORY_FILE):
     try:
-        df = pd.read_csv(HISTORY_FILE, sep=";", names=["Datum", "Titel", "Snippet"])
+        # dtype=str verhindert NaN Fehler bei Zahlen
+        df = pd.read_csv(HISTORY_FILE, sep=";", names=["Datum", "Titel", "Snippet"], dtype=str).fillna("")
+        
         # Zeige die letzten 5 Einträge (neueste zuerst)
         for i, row in df.tail(5).iloc[::-1].iterrows():
-            # Nur Headline im Expander-Titel
-            with st.sidebar.expander(f"{row['Titel']}"):
+            display_title = row['Titel']
+            if len(display_title) < 2: display_title = "Eintrag ohne Titel"
+            
+            with st.sidebar.expander(f"{display_title}"):
                 st.caption(f"📅 {row['Datum']}")
                 st.write(row['Snippet'])
-    except:
-        st.sidebar.caption("Archiv leer.")
+    except Exception as e:
+        st.sidebar.caption("Archiv wird neu aufgebaut...")
+else:
+    st.sidebar.caption("Noch keine Einträge.")
+
+
+# ==========================================
+# MAIN APP LOGIK
+# ==========================================
 
 # --- HILFSFUNKTIONEN ---
 def get_best_google_model():
@@ -122,11 +158,12 @@ def create_docx(text_content):
 
 def clean_text(text):
     if not text: return ""
-    text = text.replace('**', '').replace('__', '')
+    # Entferne Markdown
+    text = str(text).replace('**', '').replace('__', '')
     text = text.replace('### ', '').replace('## ', '').replace('# ', '')
     return text.strip()
 
-# --- PROMPT LOGIK (MASTERPROMPT) ---
+# --- PROMPT LOGIK ---
 base_rules = """
 ROLLE: Fachjournalist:in des packaging journal.
 ZIELGRUPPE: Entscheider, Ingenieure, Planer.
@@ -144,11 +181,7 @@ STILREGELN (STRICT):
 """
 
 if modus == "Messe-Vorbericht (Special)":
-    selected_messe = st.sidebar.selectbox("Messe:", ["LogiMat", "interpack", "Fachpack", "SPS"])
     l_opt = st.radio("PRINT-Länge (gilt nur für Print-Version):", ["KURZ (ca. 900 Zeichen)", "NORMAL (ca. 1300 Zeichen)", "LANG (ca. 2000 Zeichen)"], horizontal=True)
-    
-    m_links = {"LogiMat": "https://www.logimat-messe.de/de/die-messe/ausstellerliste", "interpack": "https://www.interpack.de/de/Aussteller_Produkte/Ausstellerverzeichnis", "Fachpack": "https://www.fachpack.de/de/aussteller-produkte/ausstellerliste", "SPS": "https://sps.mesago.com/nuernberg/de/ausstellersuche.html"}
-    m_link = m_links.get(selected_messe, "")
     
     target_print_len = "900"
     if "1300" in l_opt: target_print_len = "1300"
@@ -244,7 +277,7 @@ if st.button("✨ INHALTE GENERIEREN", type="primary"):
                 else:
                     st.session_state['img'] = None
 
-# --- AUSGABE ---
+# --- AUSGABE & PARSING ---
 if 'res' in st.session_state:
     res = st.session_state['res']
     
@@ -258,7 +291,8 @@ if 'res' in st.session_state:
                 p_web  = clean_text(res.split('[P_WEB]')[1].split('[P_STAND]')[0])
                 p_stand= clean_text(res.split('[P_STAND]')[1].split('[O_HEADLINE]')[0])
                 
-                save_to_history(f"Print: {p_head}", p_text[:50]+"...")
+                # Speichern (Firma: Headline)
+                save_to_history(f"{p_ober}: {p_head}", p_text[:50]+"...")
             else:
                 p_ober, p_head, p_text, p_web, p_stand = "???", "Fehler", res, "???", "???"
 
