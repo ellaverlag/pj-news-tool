@@ -38,11 +38,14 @@ def reset_app():
         if k in st.session_state: del st.session_state[k]
 
 # --- HILFSFUNKTIONEN ---
-def get_best_google_model():
+def get_google_model():
+    # Wir nehmen hart codiert das Standard-Modell, um Listen-Fehler zu vermeiden
     try:
         genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-        return "models/gemini-1.5-flash"
-    except: return None
+        return genai.GenerativeModel('gemini-1.5-flash')
+    except Exception as e:
+        st.error(f"Fehler bei Google Config: {e}")
+        return None
 
 def generate_horizontal_image(topic):
     try:
@@ -58,22 +61,15 @@ def generate_horizontal_image(topic):
 def get_website_og_image(url):
     """Holt das Vorschaubild robust. Bei Fehler gibt es None zurück (kein Absturz)."""
     try:
-        # Tarnung als Browser, um 403-Fehler zu vermeiden
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
-        r = requests.get(url, headers=headers, timeout=3) # Kurzes Timeout
+        r = requests.get(url, headers=headers, timeout=5)
         if r.status_code == 200:
             soup = BeautifulSoup(r.content, 'html.parser')
             og = soup.find("meta", property="og:image")
-            # Fallback falls property="og:image" nicht geht, versuche name="og:image"
-            if not og:
-                og = soup.find("meta", attrs={"name": "og:image"})
-            
-            if og and "content" in og.attrs:
-                return og["content"]
+            if not og: og = soup.find("meta", attrs={"name": "og:image"})
+            if og and "content" in og.attrs: return og["content"]
         return None
-    except:
-        # Bei JEDEM Netzwerkfehler (DNS, Timeout) einfach "Kein Bild" zurückgeben
-        return None
+    except: return None
 
 def create_docx(txt):
     d = Document()
@@ -86,7 +82,6 @@ def create_docx(txt):
 
 def clean_text(t):
     if not t: return ""
-    # Entfernt Markdown Bolding und Headlines für sauberes Copy/Paste
     return str(t).replace('**','').replace('__','').replace('### ','').replace('## ','').strip()
 
 # --- HEADER ---
@@ -157,8 +152,6 @@ if os.path.isfile(HISTORY_FILE):
 # ================= MAIN AREA =================
 
 # --- PROMPT LOGIK ---
-
-# Aggressive Regeln für neutrale Distanz
 anti_pr_rules = """
 STRIKTE REGELN FÜR NEUTRALITÄT (Verstoß = Fehler):
 1. PERSPEKTIVE: Schreibe ausschließlich in der 3. Person ("Das Unternehmen", "Die Maschine"). 
@@ -194,13 +187,11 @@ elif modus == "Messe-Vorbericht (Special)":
     l_opt = st.radio("PRINT-Länge:", ["KURZ (900)", "NORMAL (1300)", "LANG (2000)"], horizontal=True)
     target = len_map.get(l_opt.split()[0], "900")
     
-    # Anweisung für Varianz ohne PR-Sprech
     einstiegs_anweisung = """
     WICHTIG - EINSTIEGS-VARIANZ (Wähle einen der Typen, vermeide "Firma zeigt..."):
     Typ A (Problem-Fokus): "Steigende Energiekosten erfordern effizientere Antriebe. Genau hier setzt die neue Lösung an..."
     Typ B (Technik-Fokus): "Mit einer Taktleistung von 200 Zyklen pro Minute erreicht die neue Anlage..."
     Typ C (Trend-Fokus): "Nachhaltigkeit dominiert die Verpackungsbranche. Rezyklate stehen dabei im Mittelpunkt..."
-    
     Wähle passend zum Inhalt Typ A, B oder C. Starte NICHT mit dem Firmennamen.
     """
     
@@ -209,14 +200,12 @@ elif modus == "Messe-Vorbericht (Special)":
     TASK: Schreibe zwei Versionen für ein {selected_messe}-Special.
     {einstiegs_anweisung}
     
-    TEIL 1: PRINT-VERSION
-    - Länge: Exakt ca. {target} Zeichen.
-    - Struktur: Oberzeile, Headline, Text (SOFORTIGER journalistischer EINSTIEG, kein Anleser).
-    - Footer: Nur 'www.firma.de' | Halle/Stand.
+    TEIL 1: PRINT-VERSION (Exakt ca. {target} Zeichen).
+    Struktur: Oberzeile, Headline, Text (SOFORTIGER journalistischer EINSTIEG, kein Anleser).
+    Footer: Nur 'www.firma.de' | Halle/Stand.
     
-    TEIL 2: ONLINE-VERSION
-    - Länge: 2500-5000 Zeichen.
-    - Struktur: Headline, Anleser (max 300Z), Text mit Zwischenüberschriften, Footer.
+    TEIL 2: ONLINE-VERSION (2500-5000 Zeichen).
+    Struktur: Headline, Anleser (max 300Z), Text mit Zwischenüberschriften, Footer.
     
     FORMAT-AUSGABE: 
     [P_OBERZEILE]...[P_HEADLINE]...[P_TEXT]...[P_WEB]...[P_STAND]
@@ -241,7 +230,7 @@ custom_focus = st.text_area("🔧 Individueller Fokus / Anweisung (optional):", 
 final_text = ""
 if url_in:
     try: r = requests.get(url_in, timeout=10); final_text = BeautifulSoup(r.text, 'html.parser').get_text(separator=' ', strip=True)
-    except: st.error("URL Fehler (Seite nicht lesbar)")
+    except: st.error("URL konnte nicht gelesen werden.")
 elif file_in:
     if file_in.type == "application/pdf": p = PyPDF2.PdfReader(file_in); final_text = " ".join([page.extract_text() for page in p.pages])
     else: final_text = docx2txt.process(file_in)
@@ -254,20 +243,21 @@ if st.button("✨ INHALTE GENERIEREN", type="primary"):
         with st.spinner("KI arbeitet..."):
             is_social = "LinkedIn" in modus or "Social" in modus
             
-            # Bild laden für Social (vom Link) - JETZT ROBUST
+            # Bild laden für Social (vom Link)
             if is_social and url_in:
                 og = get_website_og_image(url_in)
                 if og: st.session_state['og_img'] = og
             
             # Text Generierung
-            mn = get_best_google_model()
-            if mn:
-                mod = genai.GenerativeModel(mn)
+            model = get_google_model()
+            if model:
                 pmt = f"{system_prompt}\nFOKUS: {custom_focus}\nLINK: {url_in}\nMATERIAL:\n{final_text}"
                 try:
-                    resp = mod.generate_content(pmt)
+                    resp = model.generate_content(pmt)
                     st.session_state['res'] = resp.text
-                except: st.error("KI-Fehler beim Generieren.")
+                except Exception as e:
+                    # HIER IST DIE WICHTIGE ÄNDERUNG ZUR FEHLERANZEIGE
+                    st.error(f"GENAUER FEHLER: {e}")
             
             # Bild KI Generierung (nur wenn nicht Social)
             if generate_img_flag and not is_social:
@@ -283,7 +273,6 @@ if 'res' in st.session_state:
         if 'og_img' in st.session_state: 
             st.image(st.session_state['og_img'], caption="Vorschau-Bild der URL", width=500)
         
-        # Clean Text anwenden um Markdown zu entfernen
         clean_res = clean_text(res)
         st.code(clean_res, language=None)
         st.caption("Oben rechts klicken zum Kopieren.")
@@ -344,7 +333,7 @@ if 'res' in st.session_state:
                     st.markdown("**Text:**"); st.code(o_text, language=None)
                     st.markdown("**Stand:**"); st.code(o_stand, language=None)
             else:
-                st.error("Formatierungs-Fehler der KI. Hier ist der Rohtext:")
+                st.error("Formatierungs-Fehler. KI-Rohtext:")
                 st.write(res)
         except: st.write(res)
 
@@ -361,7 +350,6 @@ if 'res' in st.session_state:
                 st.markdown("**Anleser:**"); st.code(anl, language=None)
                 st.markdown("**Text:**"); st.code(txt, language=None)
                 
-                # Sicherer String-Bau für Download Button
                 full_doc_text = tit + "\n\n" + anl + "\n\n" + txt
                 st.download_button("📄 Word (News)", create_docx(full_doc_text), "News.docx")
                 save_to_history(f"News: {tit}", anl[:50])
