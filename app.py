@@ -7,6 +7,8 @@ from bs4 import BeautifulSoup
 from docx import Document
 from io import BytesIO
 from openai import OpenAI
+import pandas as pd
+from datetime import datetime
 import os
 
 # --- BRANDING & FARBEN ---
@@ -29,6 +31,16 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
+# --- SESSION STATE & RESET LOGIK ---
+if 'input_key' not in st.session_state:
+    st.session_state['input_key'] = 0
+
+def reset_app():
+    """Erhöht den Key-Counter, was alle Inputs neu lädt (und leert)"""
+    st.session_state['input_key'] += 1
+    if 'res' in st.session_state: del st.session_state['res']
+    if 'img' in st.session_state: del st.session_state['img']
+
 # --- HEADER ---
 col_logo, col_title = st.columns([1, 5])
 with col_logo:
@@ -36,13 +48,43 @@ with col_logo:
 with col_title:
     st.markdown("<h1 style='margin:0;'>Redaktions Tool</h1>", unsafe_allow_html=True)
 
-# --- SIDEBAR ---
+# --- SIDEBAR: LOGIN ---
 st.sidebar.header("🔐 Login")
 pw_input = st.sidebar.text_input("Passwort:", type="password")
 if pw_input != st.secrets.get("TOOL_PASSWORD", "pj-redaktion-2026"):
     st.sidebar.warning("Bitte Passwort eingeben.")
     st.stop()
 
+# --- SIDEBAR: ARCHIV ---
+HISTORY_FILE = "news_history.csv"
+
+def save_to_history(titel, inhalt_snippet):
+    datum = datetime.now().strftime("%d.%m. %H:%M")
+    new_entry = pd.DataFrame([{"Datum": datum, "Titel": titel, "Snippet": inhalt_snippet}])
+    
+    if not os.path.isfile(HISTORY_FILE):
+        new_entry.to_csv(HISTORY_FILE, index=False, sep=";")
+    else:
+        new_entry.to_csv(HISTORY_FILE, mode='a', header=False, index=False, sep=";")
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("📚 Letzte Beiträge")
+if os.path.isfile(HISTORY_FILE):
+    try:
+        df = pd.read_csv(HISTORY_FILE, sep=";", names=["Datum", "Titel", "Snippet"])
+        # Zeige die letzten 5 Einträge (neueste zuerst)
+        for i, row in df.tail(5).iloc[::-1].iterrows():
+            with st.sidebar.expander(f"{row['Datum']}: {str(row['Titel'])[:20]}..."):
+                st.caption(f"**{row['Titel']}**")
+                st.write(row['Snippet'])
+    except:
+        st.sidebar.caption("Archiv leer oder nicht lesbar.")
+
+st.sidebar.markdown("---")
+st.sidebar.button("🗑️ ALLES LÖSCHEN / NEU", on_click=reset_app, type="secondary")
+st.sidebar.markdown("---")
+
+# --- MODUS WAHL ---
 modus = st.sidebar.radio("Erstellungs-Modus:", ["Standard Online-News", "Messe-Vorbericht (Special)"])
 generate_img_flag = st.sidebar.checkbox("KI-Beitragsbild generieren?", value=True)
 
@@ -59,7 +101,6 @@ def get_best_google_model():
 def generate_horizontal_image(topic):
     try:
         client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
-        # Festgelegtes horizontales Format (16:9)
         response = client.images.generate(
             model="dall-e-3",
             prompt=f"Professional industrial photography for packaging industry, theme: {topic}. High-end cinematic lighting, 16:9 horizontal, photorealistic, no text.",
@@ -77,17 +118,12 @@ def create_docx(text_content):
     return bio.getvalue()
 
 def clean_text(text):
-    """Entfernt Markdown-Sterne und Raute-Zeichen (###) für sauberes Kopieren"""
     if not text: return ""
-    # Entferne Markdown Fettdruck
     text = text.replace('**', '').replace('__', '')
-    # Entferne Markdown Überschriften
     text = text.replace('### ', '').replace('## ', '').replace('# ', '')
     return text.strip()
 
-# --- PROMPT LOGIK ---
-
-# Gemeinsame Basis-Regeln aus dem Masterprompt
+# --- PROMPT LOGIK (MASTERPROMPT) ---
 base_rules = """
 ROLLE: Fachjournalist:in des packaging journal.
 ZIELGRUPPE: Entscheider, Ingenieure, Planer.
@@ -106,10 +142,11 @@ STILREGELN (STRICT):
 
 if modus == "Messe-Vorbericht (Special)":
     selected_messe = st.sidebar.selectbox("Messe:", ["LogiMat", "interpack", "Fachpack", "SPS"])
-    # Neue Print-Längen Definition
     l_opt = st.radio("PRINT-Länge (gilt nur für Print-Version):", ["KURZ (ca. 900 Zeichen)", "NORMAL (ca. 1300 Zeichen)", "LANG (ca. 2000 Zeichen)"], horizontal=True)
     
-    # Extrahiere Ziel-Zeichenzahl für Print
+    m_links = {"LogiMat": "https://www.logimat-messe.de/de/die-messe/ausstellerliste", "interpack": "https://www.interpack.de/de/Aussteller_Produkte/Ausstellerverzeichnis", "Fachpack": "https://www.fachpack.de/de/aussteller-produkte/ausstellerliste", "SPS": "https://sps.mesago.com/nuernberg/de/ausstellersuche.html"}
+    m_link = m_links.get(selected_messe, "")
+    
     target_print_len = "900"
     if "1300" in l_opt: target_print_len = "1300"
     if "2000" in l_opt: target_print_len = "2000"
@@ -140,8 +177,7 @@ if modus == "Messe-Vorbericht (Special)":
     [O_HEADLINE]...[O_ANLESER]...[O_TEXT]...[O_STAND]...[O_KEYWORD]...[O_DESC]...[O_TAGS]
     """
 
-else: # Standard Online-News
-    # Neue Längen-Definitionen für Online-News
+else:
     l_opt = st.radio("Länge:", [
         "KURZ (2.000–4.000 Zeichen)", 
         "NORMAL (6.000–9.000 Zeichen)", 
@@ -167,12 +203,14 @@ else: # Standard Online-News
     [TITEL]...[ANLESER]...[TEXT]...[SNIPPET]...[KEYWORD]
     """
 
-# --- INPUTS ---
-url_in = st.text_input("Link (URL):")
-file_in = st.file_uploader("Datei:", type=["pdf", "docx", "txt"])
-text_in = st.text_area("Oder Text einfügen:", height=150)
+# --- INPUTS (MIT DYNAMISCHEN KEYS ZUM RESETTEN) ---
+# Wir nutzen den input_key aus dem SessionState, der beim Reset hochgezählt wird.
+current_key = st.session_state['input_key']
 
-# Extraktion
+url_in = st.text_input("Link (URL):", key=f"url_{current_key}")
+file_in = st.file_uploader("Datei:", type=["pdf", "docx", "txt"], key=f"file_{current_key}")
+text_in = st.text_area("Oder Text einfügen:", height=150, key=f"text_{current_key}")
+
 final_text = ""
 if url_in:
     try:
@@ -195,119 +233,102 @@ if st.button("✨ INHALTE GENERIEREN", type="primary"):
             model_name = get_best_google_model()
             if model_name:
                 model = genai.GenerativeModel(model_name)
-                # Wir geben der KI den Prompt + das Material
                 full_input = f"{system_prompt}\n\nQUELLMATERIAL:\n{final_text}"
                 response = model.generate_content(full_input)
                 st.session_state['res'] = response.text
                 
-                # Bild generieren (nur bei Online News oder wenn gewünscht auch bei Messe)
+                # Bild optional generieren
                 if generate_img_flag:
                     st.session_state['img'] = generate_horizontal_image(final_text[:200])
                 else:
                     st.session_state['img'] = None
 
-# --- AUSGABE LOGIK ---
+# --- AUSGABE & PARSING ---
 if 'res' in st.session_state:
     res = st.session_state['res']
     
-    # MESSE VORBERICHT AUSGABE
+    # 1. MESSE VORBERICHT
     if modus == "Messe-Vorbericht (Special)":
-        tab_p, tab_o = st.tabs(["📟 PRINT VERSION", "🌐 ONLINE VERSION"])
-        
-        with tab_p:
-            try:
-                # Parsing Print
-                p_ober = res.split('[P_OBERZEILE]')[1].split('[P_HEADLINE]')[0]
-                p_head = res.split('[P_HEADLINE]')[1].split('[P_TEXT]')[0]
-                p_text = res.split('[P_TEXT]')[1].split('[P_WEB]')[0]
-                p_web  = res.split('[P_WEB]')[1].split('[P_STAND]')[0]
-                p_stand= res.split('[P_STAND]')[1].split('[O_HEADLINE]')[0] # Stoppt vor Online Teil
+        # Versuch des Parsings
+        try:
+            # Print
+            if '[P_OBERZEILE]' in res:
+                p_ober = clean_text(res.split('[P_OBERZEILE]')[1].split('[P_HEADLINE]')[0])
+                p_head = clean_text(res.split('[P_HEADLINE]')[1].split('[P_TEXT]')[0])
+                p_text = clean_text(res.split('[P_TEXT]')[1].split('[P_WEB]')[0])
+                p_web  = clean_text(res.split('[P_WEB]')[1].split('[P_STAND]')[0])
+                p_stand= clean_text(res.split('[P_STAND]')[1].split('[O_HEADLINE]')[0])
+                
+                # Archivieren (Titel + kurzer Ausschnitt)
+                save_to_history(f"Print: {p_head}", p_text[:80] + "...")
+            else:
+                p_ober, p_head, p_text, p_web, p_stand = "???", "Fehler im Format", res, "???", "???"
 
-                # Bereinigen
-                p_ober = clean_text(p_ober)
-                p_head = clean_text(p_head)
-                p_text = clean_text(p_text)
-                p_web  = clean_text(p_web)
-                p_stand= clean_text(p_stand)
-                
+            # Online
+            if '[O_HEADLINE]' in res:
+                part_online = res.split('[O_HEADLINE]')[1]
+                o_head = clean_text(part_online.split('[O_ANLESER]')[0])
+                o_anle = clean_text(part_online.split('[O_ANLESER]')[1].split('[O_TEXT]')[0])
+                o_text = clean_text(part_online.split('[O_TEXT]')[1].split('[O_STAND]')[0])
+                o_stand= clean_text(part_online.split('[O_STAND]')[1].split('[O_KEYWORD]')[0])
+                o_key  = clean_text(part_online.split('[O_KEYWORD]')[1].split('[O_DESC]')[0])
+                o_desc = clean_text(part_online.split('[O_DESC]')[1].split('[O_TAGS]')[0])
+                o_tags = clean_text(part_online.split('[O_TAGS]')[1])
+            else:
+                o_head, o_anle, o_text = "Fehler", "Fehler", res
+
+            # ANZEIGE
+            tab_p, tab_o = st.tabs(["📟 PRINT VERSION", "🌐 ONLINE VERSION"])
+            
+            with tab_p:
                 full_print_doc = f"{p_ober}\n\n{p_head}\n\n{p_text}\n\n{p_web}\n{p_stand}"
-                
                 st.subheader("Vorschau Print")
-                st.text(full_print_doc) # Einfache Textanzeige zur Kontrolle
-                
+                st.text(full_print_doc)
                 st.subheader("Kopieren & Export")
                 st.code(full_print_doc, language=None)
                 st.download_button("📄 Word-Export (Nur Print)", data=create_docx(full_print_doc), file_name="PJ_Print_Beitrag.docx")
-            except Exception as e:
-                st.error("Formatierung nicht erkannt. Rohausgabe:")
-                st.write(res)
 
-        with tab_o:
-            try:
-                # Parsing Online
-                # Suche ab dem Online Teil, falls Print Tags stören
-                part_online = res.split('[O_HEADLINE]')[1]
-                
-                o_head = part_online.split('[O_ANLESER]')[0]
-                o_anle = part_online.split('[O_ANLESER]')[1].split('[O_TEXT]')[0]
-                o_text = part_online.split('[O_TEXT]')[1].split('[O_STAND]')[0]
-                o_stand= part_online.split('[O_STAND]')[1].split('[O_KEYWORD]')[0]
-                o_key  = part_online.split('[O_KEYWORD]')[1].split('[O_DESC]')[0]
-                o_desc = part_online.split('[O_DESC]')[1].split('[O_TAGS]')[0]
-                o_tags = part_online.split('[O_TAGS]')[1]
-
-                # Bereinigen
-                o_head = clean_text(o_head)
-                o_anle = clean_text(o_anle)
-                o_text = clean_text(o_text)
-                o_stand= clean_text(o_stand)
-                o_key  = clean_text(o_key)
-                o_desc = clean_text(o_desc)
-                o_tags = clean_text(o_tags)
-
+            with tab_o:
                 if st.session_state.get('img'):
                     st.image(st.session_state['img'], caption="Beitragsbild (16:9)", width=800)
                 
                 c1, c2 = st.columns(2)
                 with c1:
                     st.markdown("### 📝 Inhalt")
-                    st.caption("Titel (max 6 Wörter)")
+                    st.caption("Titel")
                     st.code(o_head, language=None)
-                    st.caption("Anleser (max 300 Zeichen)")
+                    st.caption("Anleser")
                     st.code(o_anle, language=None)
-                    st.caption("Haupttext (Clean, ohne ###)")
+                    st.caption("Haupttext")
                     st.code(o_text, language=None)
                     st.caption("Standinfo")
                     st.code(o_stand, language=None)
-                
                 with c2:
-                    st.markdown("### 🔍 SEO Box")
+                    st.markdown("### 🔍 SEO")
                     st.caption("Fokus Keyword")
                     st.code(o_key, language=None)
-                    st.caption("Meta Description (max 160)")
+                    st.caption("Description")
                     st.code(o_desc, language=None)
                     st.caption("Tags")
                     st.code(o_tags, language=None)
 
-            except Exception as e:
-                st.write(res) # Fallback
+        except Exception as e:
+            st.error("Fehler beim Verarbeiten der KI-Antwort. Bitte nochmal generieren.")
+            st.write(res)
 
-    # STANDARD ONLINE NEWS AUSGABE
+    # 2. STANDARD ONLINE NEWS
     else:
         try:
-            # Parsing
-            tit = res.split('[TITEL]')[1].split('[ANLESER]')[0]
-            anl = res.split('[ANLESER]')[1].split('[TEXT]')[0]
-            txt = res.split('[TEXT]')[1].split('[SNIPPET]')[0]
-            sni = res.split('[SNIPPET]')[1].split('[KEYWORD]')[0]
-            key = res.split('[KEYWORD]')[1]
-
-            # Bereinigen
-            tit = clean_text(tit)
-            anl = clean_text(anl)
-            txt = clean_text(txt)
-            sni = clean_text(sni)
-            key = clean_text(key)
+            if '[TITEL]' in res:
+                tit = clean_text(res.split('[TITEL]')[1].split('[ANLESER]')[0])
+                anl = clean_text(res.split('[ANLESER]')[1].split('[TEXT]')[0])
+                txt = clean_text(res.split('[TEXT]')[1].split('[SNIPPET]')[0])
+                sni = clean_text(res.split('[SNIPPET]')[1].split('[KEYWORD]')[0])
+                key = clean_text(res.split('[KEYWORD]')[1])
+                
+                save_to_history(f"News: {tit}", anl[:80] + "...")
+            else:
+                tit, anl, txt, sni, key = "Fehler", "Fehler", res, "Fehler", "Fehler"
             
             if st.session_state.get('img'):
                 st.image(st.session_state['img'], caption="Beitragsbild (16:9)", width=800)
@@ -319,12 +340,11 @@ if 'res' in st.session_state:
                 st.code(tit, language=None)
                 st.caption("Anleser")
                 st.code(anl, language=None)
-                st.caption("Text (Clean, ohne ###)")
+                st.caption("Text")
                 st.code(txt, language=None)
-            
             with c2:
                 st.subheader("SEO")
-                st.caption("Fokus Keyword")
+                st.caption("Keyword")
                 st.code(key, language=None)
                 st.caption("Snippet")
                 st.code(sni, language=None)
@@ -333,5 +353,5 @@ if 'res' in st.session_state:
             st.download_button("📄 Word-Export", data=create_docx(full_doc), file_name="PJ_Online_News.docx")
 
         except Exception as e:
-            st.error("Konnte Struktur nicht parsen. Rohdaten:")
+            st.error("Fehler beim Verarbeiten.")
             st.write(res)
