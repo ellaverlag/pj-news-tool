@@ -77,9 +77,13 @@ def create_docx(text_content):
     return bio.getvalue()
 
 def clean_text(text):
-    """Entfernt Markdown-Sterne und bereinigt den Text"""
+    """Entfernt Markdown-Sterne und Raute-Zeichen (###) für sauberes Kopieren"""
     if not text: return ""
-    return text.replace('**', '').replace('__', '').strip()
+    # Entferne Markdown Fettdruck
+    text = text.replace('**', '').replace('__', '')
+    # Entferne Markdown Überschriften
+    text = text.replace('### ', '').replace('## ', '').replace('# ', '')
+    return text.strip()
 
 # --- PROMPT LOGIK ---
 
@@ -97,16 +101,13 @@ STILREGELN (STRICT):
 - KEIN 'Über Firma XY'-Block am Ende.
 - KEIN Datum und KEINE Ortsmarke am Anfang.
 - Einstiege VARIIEREN (Use Case, Trend, Engpass...). Nicht immer 'Firma XY präsentiert'.
-- FORMATIERUNG: Antworte als REINER TEXT ohne Markdown-Formatierung (keine Fettschrift durch Sternchen).
+- FORMATIERUNG: Antworte als REINER TEXT. KEINE Markdown-Zeichen wie #, ##, ### oder ** verwenden!
 """
 
 if modus == "Messe-Vorbericht (Special)":
     selected_messe = st.sidebar.selectbox("Messe:", ["LogiMat", "interpack", "Fachpack", "SPS"])
     # Neue Print-Längen Definition
     l_opt = st.radio("PRINT-Länge (gilt nur für Print-Version):", ["KURZ (ca. 900 Zeichen)", "NORMAL (ca. 1300 Zeichen)", "LANG (ca. 2000 Zeichen)"], horizontal=True)
-    
-    m_links = {"LogiMat": "https://www.logimat-messe.de/de/die-messe/ausstellerliste", "interpack": "https://www.interpack.de/de/Aussteller_Produkte/Ausstellerverzeichnis", "Fachpack": "https://www.fachpack.de/de/aussteller-produkte/ausstellerliste", "SPS": "https://sps.mesago.com/nuernberg/de/ausstellersuche.html"}
-    m_link = m_links.get(selected_messe, "")
     
     # Extrahiere Ziel-Zeichenzahl für Print
     target_print_len = "900"
@@ -123,14 +124,14 @@ if modus == "Messe-Vorbericht (Special)":
     - Oberzeile: [Firma]
     - Headline: [Max 6 Wörter, prägnant]
     - Text: SOFORTIGER EINSTIEG ins Thema. KEIN Anleser.
-    - Footer: Website ({m_link}) | Halle/Stand (nur wenn bekannt, sonst 'Halle ??, Stand ??').
+    - Footer: Firmen-Website (Recherchieren oder aus Text. Falls unbekannt '???') | Halle/Stand (nur wenn bekannt, sonst 'Halle ??, Stand ??').
     
     --- TEIL 2: ONLINE-VERSION ---
     VORGABE: Standardlänge 2500-5000 Zeichen.
     STRUKTUR:
     - Headline: [Max 6 Wörter]
     - Anleser: [Max 300 Zeichen, 2-3 Sätze]
-    - Text: [Mit Zwischenüberschriften, journalistisch tiefgehend]
+    - Text: [Mit Zwischenüberschriften als normale Zeile ohne #, journalistisch tiefgehend]
     - Footer: Halle/Stand.
     - SEO: Fokus-Keyword, Meta Description (max 160), Tags.
 
@@ -148,8 +149,8 @@ else: # Standard Online-News
     ], horizontal=True)
     
     len_instruction = "2000-4000 Zeichen"
-    if "NORMAL" in l_opt: len_instruction = "6000-9000 Zeichen, mit H2 Zwischenüberschriften"
-    if "LANG" in l_opt: len_instruction = "12000-15000 Zeichen, mit H2 Zwischenüberschriften"
+    if "NORMAL" in l_opt: len_instruction = "6000-9000 Zeichen, nutze Zwischenüberschriften (ohne #)"
+    if "LANG" in l_opt: len_instruction = "12000-15000 Zeichen, nutze Zwischenüberschriften (ohne #)"
 
     system_prompt = f"""
     {base_rules}
@@ -159,7 +160,7 @@ else: # Standard Online-News
     STRUKTUR:
     1. Titel: Max 6 Wörter, sachlich, kein Clickbait.
     2. Anleser: Max 300 Zeichen, neutral.
-    3. Haupttext: Fließtext, journalistisch, keine PR.
+    3. Haupttext: Fließtext, journalistisch, keine PR. Zwischenüberschriften als normale Textzeile schreiben.
     4. SEO: Snippet (max 160 Zeichen), Fokus-Keyword.
     
     FORMAT-AUSGABE (Nutze exakt diese Trenner):
@@ -200,7 +201,6 @@ if st.button("✨ INHALTE GENERIEREN", type="primary"):
                 st.session_state['res'] = response.text
                 
                 # Bild generieren (nur bei Online News oder wenn gewünscht auch bei Messe)
-                # Da Messe-Vorberichte oft vom Hersteller Bildmaterial haben, ist es hier optional nützlich.
                 if generate_img_flag:
                     st.session_state['img'] = generate_horizontal_image(final_text[:200])
                 else:
@@ -275,7 +275,7 @@ if 'res' in st.session_state:
                     st.code(o_head, language=None)
                     st.caption("Anleser (max 300 Zeichen)")
                     st.code(o_anle, language=None)
-                    st.caption("Haupttext")
+                    st.caption("Haupttext (Clean, ohne ###)")
                     st.code(o_text, language=None)
                     st.caption("Standinfo")
                     st.code(o_stand, language=None)
@@ -319,7 +319,7 @@ if 'res' in st.session_state:
                 st.code(tit, language=None)
                 st.caption("Anleser")
                 st.code(anl, language=None)
-                st.caption("Text")
+                st.caption("Text (Clean, ohne ###)")
                 st.code(txt, language=None)
             
             with c2:
